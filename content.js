@@ -81,7 +81,7 @@
   function findDownloadableVideos() {
     return Array.from(document.querySelectorAll("video")).filter((v) => {
       const src = v.src || v.currentSrc;
-      return src && src.startsWith("blob:");
+      return src && (src.startsWith("blob:") || src.startsWith("https://") || src.startsWith("https://"));
     });
   }
 
@@ -283,7 +283,7 @@
   scan();
   // ── Debug: visible indicator that extension is running ──
   const badge = document.createElement("div");
-  badge.textContent = "TG DL v1.2.0 ✓";
+  badge.textContent = "TG DL v1.3.0 ✓";
   badge.style.cssText =
     "position:fixed;bottom:8px;left:8px;z-index:2147483647;" +
     "padding:4px 10px;border-radius:8px;font-size:11px;" +
@@ -294,7 +294,7 @@
   setTimeout(() => { badge.style.opacity = "0"; }, 5000);
   setTimeout(() => { badge.remove(); }, 7000);
 
-  console.log("[TG Video DL] Extension loaded v1.2.0");
+  console.log("[TG Video DL] Extension loaded v1.3.0");
   console.log("[TG Video DL] Videos found on page:", document.querySelectorAll("video").length);
   document.querySelectorAll("video").forEach((v, i) => {
     console.log(`[TG Video DL] Video #${i}: src=${(v.src || v.currentSrc || "NONE").substring(0, 80)}, paused=${v.paused}`);

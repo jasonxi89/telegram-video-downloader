@@ -1,0 +1,1 @@
+document.querySelectorAll('video').forEach((v,i) => console.log(`Video #${i}: src=${v.src?.substring(0,80) || 'NONE'}, currentSrc=${v.currentSrc?.substring(0,80) || 'NONE'}, paused=${v.paused}`))
