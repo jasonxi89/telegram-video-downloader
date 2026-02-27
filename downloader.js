@@ -4,8 +4,8 @@
 if (!window.__TG_DL_LOADED) {
   window.__TG_DL_LOADED = true;
 
-  const PARALLEL = 6; // concurrent connections
-  const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB per chunk
+  const PARALLEL = 16; // concurrent connections
+  const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB per chunk
 
   window.__TG_DL = async function (url, opts = {}) {
     const { onProgress, onComplete, onError } = opts;
