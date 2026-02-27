@@ -2,6 +2,7 @@
   "use strict";
 
   const DL_BTN_CLASS = "tg-dl-btn";
+  const POLL_MS = 800;
 
   // ── Filename ──
   function generateFilename() {
@@ -21,14 +22,24 @@
   }
 
   // ── Download ──
-  async function downloadVideo(blobUrl) {
-    if (!blobUrl) return;
-    console.log("[TG Video DL] Downloading:", blobUrl.substring(0, 50));
+  async function downloadVideo(videoEl, btnEl) {
+    const src = videoEl.src || videoEl.currentSrc;
+    if (!src) return;
+
+    if (btnEl) {
+      btnEl.dataset.origText = btnEl.textContent;
+      btnEl.textContent = "⏳";
+      btnEl.style.pointerEvents = "none";
+    }
+
+    console.log("[TG Video DL] Downloading:", src.substring(0, 60));
+
     try {
-      const resp = await fetch(blobUrl);
+      const resp = await fetch(src);
       const blob = await resp.blob();
       const url = URL.createObjectURL(blob);
       const filename = generateFilename();
+
       try {
         chrome.runtime.sendMessage(
           { action: "download", url, filename, saveAs: true },
@@ -45,6 +56,11 @@
       }
     } catch (err) {
       console.error("[TG Video DL] Download failed:", err);
+    } finally {
+      if (btnEl) {
+        btnEl.textContent = btnEl.dataset.origText || "⬇";
+        btnEl.style.pointerEvents = "";
+      }
     }
   }
 
@@ -61,189 +77,209 @@
     }, 5000);
   }
 
-  // ── Bubble download button (below video in chat) ──
-  function createBubbleButton(video) {
-    const btn = document.createElement("div");
-    btn.className = DL_BTN_CLASS;
-    btn.innerHTML =
-      '<svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" style="margin-right:4px;">' +
-      '<path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>' +
-      '<span>Download</span>';
-    btn.style.cssText =
-      "display:inline-flex;align-items:center;justify-content:center;" +
-      "padding:4px 10px;margin-top:4px;border-radius:12px;cursor:pointer;" +
-      "font-size:12px;line-height:16px;color:var(--primary-color,#3390ec);" +
-      "background:var(--surface-color,rgba(0,0,0,0.04));" +
-      "transition:background 0.15s;user-select:none;";
-    btn.addEventListener("mouseenter", () => {
-      btn.style.background = "var(--light-secondary-text-color,rgba(0,0,0,0.08))";
+  // ── Generic: find all downloadable videos on page ──
+  function findDownloadableVideos() {
+    return Array.from(document.querySelectorAll("video")).filter((v) => {
+      const src = v.src || v.currentSrc;
+      return src && src.startsWith("blob:");
     });
-    btn.addEventListener("mouseleave", () => {
-      btn.style.background = "var(--surface-color,rgba(0,0,0,0.04))";
-    });
-    btn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const src = video.src || video.currentSrc;
-      if (src) {
-        btn.querySelector("span").textContent = "Downloading...";
-        downloadVideo(src).then(() => {
-          btn.querySelector("span").textContent = "Download";
-        });
-      }
-    });
-    return btn;
   }
 
-  // ── Media Viewer download button (topbar) ──
+  // ── Determine if a video is in a full-screen/media viewer overlay ──
+  function isInMediaViewer(video) {
+    let el = video;
+    while (el && el !== document.body) {
+      const style = getComputedStyle(el);
+      // Full-screen overlay: fixed/absolute position covering the viewport
+      if (
+        (style.position === "fixed" || style.position === "absolute") &&
+        parseInt(style.width) > window.innerWidth * 0.5 &&
+        parseInt(style.height) > window.innerHeight * 0.5
+      ) {
+        return el;
+      }
+      // Known class names (Web K + Web A)
+      if (
+        el.classList.contains("media-viewer-whole") ||     // Web K
+        el.classList.contains("MediaViewer") ||             // Web A
+        el.classList.contains("media-viewer") ||            // Generic
+        el.id === "MediaViewer"                             // Web A alt
+      ) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+    return null;
+  }
+
+  // ── Create download button for media viewer (floating top-right) ──
   function createViewerButton(video) {
     const btn = document.createElement("button");
-    btn.className = DL_BTN_CLASS + " btn-icon default__button";
+    btn.className = DL_BTN_CLASS;
+    btn.textContent = "⬇";
     btn.title = "Download Video";
-    btn.innerHTML =
-      '<svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor">' +
-      '<path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>';
     btn.style.cssText =
-      "cursor:pointer;background:none;border:none;color:white;padding:8px;" +
-      "display:flex;align-items:center;justify-content:center;border-radius:50%;" +
-      "transition:background 0.2s;";
+      "position:fixed;top:16px;right:60px;z-index:2147483647;" +
+      "width:44px;height:44px;border-radius:50%;border:none;" +
+      "background:rgba(0,0,0,0.6);color:#fff;font-size:22px;" +
+      "cursor:pointer;display:flex;align-items:center;justify-content:center;" +
+      "backdrop-filter:blur(4px);transition:background 0.2s;";
     btn.addEventListener("mouseenter", () => {
-      btn.style.background = "rgba(255,255,255,0.1)";
+      btn.style.background = "rgba(0,0,0,0.85)";
     });
     btn.addEventListener("mouseleave", () => {
-      btn.style.background = "none";
+      btn.style.background = "rgba(0,0,0,0.6)";
     });
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      downloadVideo(video.src || video.currentSrc);
+      downloadVideo(video, btn);
     });
     return btn;
   }
 
-  // ── Inject button below video in chat bubble ──
-  function injectBubbleButton(video) {
-    if (video.dataset.tgDl) return;
-    const src = video.src || video.currentSrc;
-    if (!src || !src.startsWith("blob:")) return;
+  // ── Create download button for inline video (below video) ──
+  function createInlineButton(video) {
+    const btn = document.createElement("div");
+    btn.className = DL_BTN_CLASS;
+    btn.textContent = "⬇ Download";
+    btn.style.cssText =
+      "display:inline-flex;align-items:center;gap:4px;" +
+      "padding:4px 12px;margin-top:4px;border-radius:12px;cursor:pointer;" +
+      "font-size:12px;line-height:16px;color:#3390ec;" +
+      "background:rgba(51,144,236,0.08);" +
+      "transition:background 0.15s;user-select:none;";
+    btn.addEventListener("mouseenter", () => {
+      btn.style.background = "rgba(51,144,236,0.16)";
+    });
+    btn.addEventListener("mouseleave", () => {
+      btn.style.background = "rgba(51,144,236,0.08)";
+    });
+    btn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      downloadVideo(video, btn);
+    });
+    return btn;
+  }
 
-    // Find the parent bubble
-    const bubble = video.closest(".bubble");
-    if (!bubble) return;
-    // Already has a button?
-    if (bubble.querySelector("." + DL_BTN_CLASS)) return;
+  // ── Main scan: find videos, add buttons ──
+  function scan() {
+    const videos = findDownloadableVideos();
 
-    video.dataset.tgDl = "1";
+    for (const video of videos) {
+      if (video.dataset.tgDl === "1") continue;
 
-    // Find the best place to insert: after the media container
-    const attachment =
-      video.closest(".attachment") ||
-      video.closest(".media-container") ||
-      video.closest(".media-container-aspecter") ||
-      video.parentElement;
-    if (!attachment) return;
+      const viewerContainer = isInMediaViewer(video);
 
-    const btn = createBubbleButton(video);
-    // Insert after the attachment container
-    if (attachment.nextSibling) {
-      attachment.parentElement.insertBefore(btn, attachment.nextSibling);
-    } else {
-      attachment.parentElement.appendChild(btn);
+      if (viewerContainer) {
+        // Media viewer: add fixed-position button on screen
+        if (document.querySelector("." + DL_BTN_CLASS + "[style*='fixed']")) {
+          continue; // Already have a viewer button
+        }
+        video.dataset.tgDl = "1";
+        const btn = createViewerButton(video);
+        document.body.appendChild(btn);
+        console.log("[TG Video DL] Viewer download button added");
+
+        // Remove button when viewer closes
+        const closeWatcher = setInterval(() => {
+          if (!document.body.contains(viewerContainer) || !viewerContainer.offsetParent) {
+            btn.remove();
+            video.dataset.tgDl = "";
+            clearInterval(closeWatcher);
+            console.log("[TG Video DL] Viewer closed, button removed");
+          }
+        }, 500);
+      } else {
+        // Inline video in chat bubble
+        video.dataset.tgDl = "1";
+
+        // Find the message container to append button after video area
+        const container =
+          video.closest(".attachment") ||
+          video.closest(".media-container") ||
+          video.closest(".media-inner") ||
+          video.closest(".Message") ||
+          video.closest(".bubble") ||
+          video.parentElement;
+
+        if (!container) continue;
+
+        // Don't add duplicate
+        if (container.parentElement.querySelector("." + DL_BTN_CLASS)) continue;
+
+        const btn = createInlineButton(video);
+        container.after(btn);
+        console.log("[TG Video DL] Inline download button added");
+      }
     }
-
-    console.log("[TG Video DL] Button added below video in bubble");
   }
 
-  // ── Inject button in media viewer topbar ──
-  function injectViewerButton() {
-    const viewer = document.querySelector(".media-viewer-whole");
-    if (!viewer) return;
-    if (viewer.querySelector("." + DL_BTN_CLASS)) return;
-
-    const video = viewer.querySelector(
-      ".media-viewer-mover.active video, .media-viewer-aspecter video"
-    );
-    if (!video) return;
-    const src = video.src || video.currentSrc;
-    if (!src) return;
-
-    const buttonsBar = viewer.querySelector(".media-viewer-buttons");
-    if (!buttonsBar) return;
-
-    const btn = createViewerButton(video);
-    buttonsBar.insertBefore(btn, buttonsBar.firstChild);
-    console.log("[TG Video DL] Button added in media viewer topbar");
-  }
-
-  // ── Process a video element: inject now or watch for src ──
+  // ── Watch for src changes on all video elements ──
   const watchedVideos = new WeakSet();
 
-  function processVideo(video) {
+  function watchVideo(video) {
     if (watchedVideos.has(video)) return;
     watchedVideos.add(video);
 
-    const src = video.src || video.currentSrc;
-    if (src && src.startsWith("blob:")) {
-      injectBubbleButton(video);
-    }
+    // Observe src attribute changes
+    const obs = new MutationObserver(() => scan());
+    obs.observe(video, { attributes: true, attributeFilter: ["src"] });
 
-    // Watch for src changes (video loads later)
-    const srcObserver = new MutationObserver(() => {
-      const newSrc = video.src || video.currentSrc;
-      if (newSrc && newSrc.startsWith("blob:")) {
-        injectBubbleButton(video);
-      }
-    });
-    srcObserver.observe(video, {
-      attributes: true,
-      attributeFilter: ["src"],
-    });
-
-    // Also listen for loadeddata event (some videos set src programmatically)
-    video.addEventListener("loadeddata", () => {
-      injectBubbleButton(video);
-    }, { once: true });
+    // Also listen for loadeddata
+    video.addEventListener("loadeddata", () => scan(), { once: true });
   }
 
-  // ── Scan all existing videos ──
-  function scanVideos() {
-    document.querySelectorAll("video").forEach(processVideo);
-  }
-
-  // ── Main observer: watch for new video elements + media viewer ──
+  // ── MutationObserver: detect new video elements ──
   const mainObserver = new MutationObserver((mutations) => {
-    let hasNewNodes = false;
-
+    let found = false;
     for (const m of mutations) {
       for (const node of m.addedNodes) {
         if (!(node instanceof HTMLElement)) continue;
-        hasNewNodes = true;
-
-        // Direct video element added
         if (node.tagName === "VIDEO") {
-          processVideo(node);
+          watchVideo(node);
+          found = true;
         }
-        // Container with videos inside
-        const videos = node.querySelectorAll?.("video");
-        if (videos) {
-          videos.forEach(processVideo);
+        const vids = node.querySelectorAll?.("video");
+        if (vids && vids.length) {
+          vids.forEach(watchVideo);
+          found = true;
         }
       }
     }
-
-    // Check media viewer
-    if (hasNewNodes) {
-      injectViewerButton();
-    }
+    if (found) scan();
   });
 
   mainObserver.observe(document.body, { childList: true, subtree: true });
 
-  // ── Also poll for media viewer (backup, catches edge cases) ──
-  setInterval(injectViewerButton, 1000);
+  // ── Periodic poll (catches edge cases) ──
+  setInterval(() => {
+    document.querySelectorAll("video").forEach(watchVideo);
+    scan();
+  }, POLL_MS);
 
-  // ── Initial scan ──
-  scanVideos();
+  // ── Clean up stale fixed buttons (viewer closed but button remains) ──
+  setInterval(() => {
+    document.querySelectorAll("." + DL_BTN_CLASS + "[style*='fixed']").forEach((btn) => {
+      // Check if any media viewer is still open
+      const hasViewer =
+        document.querySelector(".media-viewer-whole") ||
+        document.querySelector(".MediaViewer") ||
+        document.querySelector("[class*='MediaViewer']") ||
+        document.querySelector("[class*='media-viewer']");
+      if (!hasViewer) {
+        btn.remove();
+        // Reset tgDl flags so buttons can be re-added
+        document.querySelectorAll("video[data-tg-dl='1']").forEach((v) => {
+          v.dataset.tgDl = "";
+        });
+      }
+    });
+  }, 1000);
 
-  console.log("[TG Video DL] Extension loaded. Videos with blob src will get a download button.");
+  // ── Initial ──
+  document.querySelectorAll("video").forEach(watchVideo);
+  scan();
+  console.log("[TG Video DL] Extension loaded v1.1.1");
 })();
