@@ -281,5 +281,22 @@
   // ── Initial ──
   document.querySelectorAll("video").forEach(watchVideo);
   scan();
-  console.log("[TG Video DL] Extension loaded v1.1.1");
+  // ── Debug: visible indicator that extension is running ──
+  const badge = document.createElement("div");
+  badge.textContent = "TG DL v1.2.0 ✓";
+  badge.style.cssText =
+    "position:fixed;bottom:8px;left:8px;z-index:2147483647;" +
+    "padding:4px 10px;border-radius:8px;font-size:11px;" +
+    "background:rgba(0,0,0,0.6);color:#4f4;font-family:monospace;" +
+    "pointer-events:none;opacity:0.8;transition:opacity 2s;";
+  document.body.appendChild(badge);
+  // Fade out after 5 seconds
+  setTimeout(() => { badge.style.opacity = "0"; }, 5000);
+  setTimeout(() => { badge.remove(); }, 7000);
+
+  console.log("[TG Video DL] Extension loaded v1.2.0");
+  console.log("[TG Video DL] Videos found on page:", document.querySelectorAll("video").length);
+  document.querySelectorAll("video").forEach((v, i) => {
+    console.log(`[TG Video DL] Video #${i}: src=${(v.src || v.currentSrc || "NONE").substring(0, 80)}, paused=${v.paused}`);
+  });
 })();
