@@ -1,83 +1,122 @@
 // ── Core download engine (runs in MAIN world) ──
-// Fetches video via chunked Range requests through Telegram's Service Worker
+// Parallel chunked Range requests for fast downloads
 
 if (!window.__TG_DL_LOADED) {
   window.__TG_DL_LOADED = true;
 
-  const RANGE_REGEX = /^bytes (\d+)-(\d+)\/(\d+)$/;
+  const PARALLEL = 6; // concurrent connections
+  const CHUNK_SIZE = 2 * 1024 * 1024; // 2MB per chunk
 
-  window.__TG_DL = function (url, opts = {}) {
+  window.__TG_DL = async function (url, opts = {}) {
     const { onProgress, onComplete, onError } = opts;
-    const blobs = [];
-    let offset = 0;
-    let total = null;
 
-    function fetchPart() {
-      fetch(url, {
+    try {
+      // Step 1: probe total size with a small Range request
+      const probe = await fetch(url, {
         method: "GET",
-        headers: { Range: "bytes=" + offset + "-" },
-      })
-        .then((res) => {
-          if (res.status !== 200 && res.status !== 206) {
-            throw new Error("HTTP " + res.status);
+        headers: { Range: "bytes=0-0" },
+      });
+
+      let totalSize = 0;
+      const rangeHeader = probe.headers.get("Content-Range");
+      if (rangeHeader) {
+        // "bytes 0-0/12345678"
+        const match = rangeHeader.match(/\/(\d+)$/);
+        if (match) totalSize = parseInt(match[1]);
+      }
+
+      if (!totalSize) {
+        // Fallback: full download (no Range support)
+        console.log("[TG DL] No Range support, falling back to single fetch");
+        const resp = await fetch(url);
+        const blob = await resp.blob();
+        triggerSave(blob);
+        if (onComplete) onComplete();
+        return;
+      }
+
+      console.log("[TG DL] Total size:", (totalSize / 1024 / 1024).toFixed(1), "MB");
+
+      // Step 2: create chunk ranges
+      const chunks = [];
+      for (let start = 0; start < totalSize; start += CHUNK_SIZE) {
+        const end = Math.min(start + CHUNK_SIZE - 1, totalSize - 1);
+        chunks.push({ index: chunks.length, start, end, blob: null });
+      }
+
+      // Step 3: parallel download with concurrency limit
+      let downloaded = 0;
+      let nextChunk = 0;
+
+      function reportProgress() {
+        if (onProgress && totalSize) {
+          onProgress(Math.min(100, Math.round((downloaded * 100) / totalSize)));
+        }
+      }
+
+      async function worker() {
+        while (nextChunk < chunks.length) {
+          const chunk = chunks[nextChunk++];
+
+          const resp = await fetch(url, {
+            method: "GET",
+            headers: {
+              Range: "bytes=" + chunk.start + "-" + chunk.end,
+            },
+          });
+
+          if (resp.status !== 200 && resp.status !== 206) {
+            throw new Error("HTTP " + resp.status + " on chunk " + chunk.index);
           }
 
-          const range = res.headers.get("Content-Range");
-          const match = range && range.match(RANGE_REGEX);
+          chunk.blob = await resp.blob();
+          downloaded += chunk.blob.size;
+          reportProgress();
+        }
+      }
 
-          if (match) {
-            offset = parseInt(match[2]) + 1;
-            total = parseInt(match[3]);
-          } else if (res.status === 200 && offset === 0) {
-            total = parseInt(res.headers.get("Content-Length")) || 0;
-            offset = total;
-          }
+      // Launch parallel workers
+      const workers = [];
+      for (let i = 0; i < Math.min(PARALLEL, chunks.length); i++) {
+        workers.push(worker());
+      }
+      await Promise.all(workers);
 
-          if (onProgress && total) {
-            onProgress(Math.min(100, Math.round((offset * 100) / total)));
-          }
+      // Step 4: merge chunks in order
+      const orderedBlobs = chunks.map((c) => c.blob);
+      const finalBlob = new Blob(orderedBlobs, { type: "video/mp4" });
+      triggerSave(finalBlob);
 
-          return res.blob();
-        })
-        .then((blob) => {
-          blobs.push(blob);
-
-          if (total && offset < total) {
-            fetchPart();
-          } else {
-            // Done — concatenate and trigger download
-            const final = new Blob(blobs, { type: "video/mp4" });
-            const blobUrl = URL.createObjectURL(final);
-            const now = new Date();
-            const pad = (n) => String(n).padStart(2, "0");
-            const ts =
-              now.getFullYear() +
-              pad(now.getMonth() + 1) +
-              pad(now.getDate()) +
-              "_" +
-              pad(now.getHours()) +
-              pad(now.getMinutes()) +
-              pad(now.getSeconds());
-
-            const a = document.createElement("a");
-            a.href = blobUrl;
-            a.download = "telegram_video_" + ts + ".mp4";
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
-
-            if (onComplete) onComplete();
-          }
-        })
-        .catch((err) => {
-          console.error("[TG DL] Error:", err);
-          if (onError) onError(err.message);
-        });
+      if (onComplete) onComplete();
+    } catch (err) {
+      console.error("[TG DL] Error:", err);
+      if (onError) onError(err.message);
     }
-
-    fetchPart();
   };
 
-  console.log("[TG DL] Core downloader loaded (MAIN world)");
+  function triggerSave(blob) {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const ts =
+      now.getFullYear() +
+      pad(now.getMonth() + 1) +
+      pad(now.getDate()) +
+      "_" +
+      pad(now.getHours()) +
+      pad(now.getMinutes()) +
+      pad(now.getSeconds());
+
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = blobUrl;
+    a.download = "telegram_video_" + ts + ".mp4";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+    console.log("[TG DL] Download triggered:", a.download,
+      (blob.size / 1024 / 1024).toFixed(1) + "MB");
+  }
+
+  console.log("[TG DL] Core downloader loaded (parallel x" + PARALLEL + ")");
 }
