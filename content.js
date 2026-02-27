@@ -22,59 +22,68 @@
   }
 
   // ── Download ──
+  // Content script fetches through page's Service Worker (gets real video data)
+  // then triggers download via <a download> in page context (avoids extension context issue)
   async function downloadVideo(videoEl, btnEl) {
     const src = videoEl.src || videoEl.currentSrc;
     if (!src) return;
 
     if (btnEl) {
       btnEl.dataset.origText = btnEl.textContent;
-      btnEl.textContent = "⏳";
+      btnEl.textContent = "⏳ Downloading...";
       btnEl.style.pointerEvents = "none";
     }
 
-    console.log("[TG Video DL] Downloading:", src.substring(0, 60));
+    console.log("[TG Video DL] Downloading:", src.substring(0, 80));
 
     try {
+      // Fetch through page context (Service Worker will serve real video data)
       const resp = await fetch(src);
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const filename = generateFilename();
+      const contentType = resp.headers.get("content-type") || "";
+      console.log("[TG Video DL] Response content-type:", contentType);
 
-      try {
-        chrome.runtime.sendMessage(
-          { action: "download", url, filename, saveAs: true },
-          (r) => {
-            if (chrome.runtime.lastError || !r || !r.success) {
-              aDownload(url, filename);
-            } else {
-              setTimeout(() => URL.revokeObjectURL(url), 10000);
-            }
-          }
-        );
-      } catch {
-        aDownload(url, filename);
+      // Verify we got video data, not HTML
+      if (contentType.includes("text/html")) {
+        console.error("[TG Video DL] Got HTML instead of video, trying alternate method");
+        // Try fetching with range header (some service workers need this)
+        const resp2 = await fetch(src, {
+          headers: { Range: "bytes=0-" },
+        });
+        const blob2 = await resp2.blob();
+        triggerDownload(blob2);
+        return;
       }
+
+      const blob = await resp.blob();
+      triggerDownload(blob);
     } catch (err) {
       console.error("[TG Video DL] Download failed:", err);
     } finally {
       if (btnEl) {
-        btnEl.textContent = btnEl.dataset.origText || "⬇";
+        btnEl.textContent = btnEl.dataset.origText || "⬇ Download";
         btnEl.style.pointerEvents = "";
       }
     }
   }
 
-  function aDownload(url, filename) {
+  function triggerDownload(blob) {
+    // Force video MIME type
+    const videoBlob = new Blob([blob], { type: "video/mp4" });
+    const url = URL.createObjectURL(videoBlob);
+    const filename = generateFilename();
+
+    // Download via <a> tag in page context (bypasses extension context issues)
     const a = document.createElement("a");
     a.href = url;
     a.download = filename;
     a.style.display = "none";
     document.body.appendChild(a);
     a.click();
+    console.log("[TG Video DL] Download triggered:", filename);
     setTimeout(() => {
       a.remove();
       URL.revokeObjectURL(url);
-    }, 5000);
+    }, 10000);
   }
 
   // ── Generic: find all downloadable videos on page ──
@@ -283,7 +292,7 @@
   scan();
   // ── Debug: visible indicator that extension is running ──
   const badge = document.createElement("div");
-  badge.textContent = "TG DL v1.3.0 ✓";
+  badge.textContent = "TG DL v1.4.0 ✓";
   badge.style.cssText =
     "position:fixed;bottom:8px;left:8px;z-index:2147483647;" +
     "padding:4px 10px;border-radius:8px;font-size:11px;" +
@@ -294,7 +303,7 @@
   setTimeout(() => { badge.style.opacity = "0"; }, 5000);
   setTimeout(() => { badge.remove(); }, 7000);
 
-  console.log("[TG Video DL] Extension loaded v1.3.0");
+  console.log("[TG Video DL] Extension loaded v1.4.0");
   console.log("[TG Video DL] Videos found on page:", document.querySelectorAll("video").length);
   document.querySelectorAll("video").forEach((v, i) => {
     console.log(`[TG Video DL] Video #${i}: src=${(v.src || v.currentSrc || "NONE").substring(0, 80)}, paused=${v.paused}`);
