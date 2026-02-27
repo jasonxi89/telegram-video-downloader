@@ -1,97 +1,65 @@
 // ── Core download engine (runs in MAIN world) ──
-// Parallel chunked Range requests for fast downloads
+// Sequential chunked Range requests (Telegram SW requires sequential access)
 
 if (!window.__TG_DL_LOADED) {
   window.__TG_DL_LOADED = true;
 
-  const PARALLEL = 16; // concurrent connections
-  const CHUNK_SIZE = 1 * 1024 * 1024; // 1MB per chunk
+  const RANGE_REGEX = /^bytes (\d+)-(\d+)\/(\d+)$/;
 
-  window.__TG_DL = async function (url, opts = {}) {
+  window.__TG_DL = function (url, opts = {}) {
     const { onProgress, onComplete, onError } = opts;
+    const blobs = [];
+    let offset = 0;
+    let total = null;
 
-    try {
-      // Step 1: probe total size with a small Range request
-      const probe = await fetch(url, {
+    function fetchNext() {
+      fetch(url, {
         method: "GET",
-        headers: { Range: "bytes=0-0" },
-      });
-
-      let totalSize = 0;
-      const rangeHeader = probe.headers.get("Content-Range");
-      if (rangeHeader) {
-        // "bytes 0-0/12345678"
-        const match = rangeHeader.match(/\/(\d+)$/);
-        if (match) totalSize = parseInt(match[1]);
-      }
-
-      if (!totalSize) {
-        // Fallback: full download (no Range support)
-        console.log("[TG DL] No Range support, falling back to single fetch");
-        const resp = await fetch(url);
-        const blob = await resp.blob();
-        triggerSave(blob);
-        if (onComplete) onComplete();
-        return;
-      }
-
-      console.log("[TG DL] Total size:", (totalSize / 1024 / 1024).toFixed(1), "MB");
-
-      // Step 2: create chunk ranges
-      const chunks = [];
-      for (let start = 0; start < totalSize; start += CHUNK_SIZE) {
-        const end = Math.min(start + CHUNK_SIZE - 1, totalSize - 1);
-        chunks.push({ index: chunks.length, start, end, blob: null });
-      }
-
-      // Step 3: parallel download with concurrency limit
-      let downloaded = 0;
-      let nextChunk = 0;
-
-      function reportProgress() {
-        if (onProgress && totalSize) {
-          onProgress(Math.min(100, Math.round((downloaded * 100) / totalSize)));
-        }
-      }
-
-      async function worker() {
-        while (nextChunk < chunks.length) {
-          const chunk = chunks[nextChunk++];
-
-          const resp = await fetch(url, {
-            method: "GET",
-            headers: {
-              Range: "bytes=" + chunk.start + "-" + chunk.end,
-            },
-          });
-
-          if (resp.status !== 200 && resp.status !== 206) {
-            throw new Error("HTTP " + resp.status + " on chunk " + chunk.index);
+        headers: { Range: "bytes=" + offset + "-" },
+      })
+        .then((res) => {
+          if (res.status !== 200 && res.status !== 206) {
+            throw new Error("HTTP " + res.status);
           }
 
-          chunk.blob = await resp.blob();
-          downloaded += chunk.blob.size;
-          reportProgress();
-        }
-      }
+          const range = res.headers.get("Content-Range");
+          const match = range && range.match(RANGE_REGEX);
 
-      // Launch parallel workers
-      const workers = [];
-      for (let i = 0; i < Math.min(PARALLEL, chunks.length); i++) {
-        workers.push(worker());
-      }
-      await Promise.all(workers);
+          if (match) {
+            offset = parseInt(match[2]) + 1;
+            total = parseInt(match[3]);
+          } else if (res.status === 200 && offset === 0) {
+            // Full response, no chunking
+            total = parseInt(res.headers.get("Content-Length")) || 0;
+            offset = total;
+          }
 
-      // Step 4: merge chunks in order
-      const orderedBlobs = chunks.map((c) => c.blob);
-      const finalBlob = new Blob(orderedBlobs, { type: "video/mp4" });
-      triggerSave(finalBlob);
+          if (onProgress && total) {
+            onProgress(Math.min(100, Math.round((offset * 100) / total)));
+          }
 
-      if (onComplete) onComplete();
-    } catch (err) {
-      console.error("[TG DL] Error:", err);
-      if (onError) onError(err.message);
+          return res.blob();
+        })
+        .then((blob) => {
+          blobs.push(blob);
+
+          if (total && offset < total) {
+            // More chunks to fetch
+            fetchNext();
+          } else {
+            // Done — merge and save
+            const finalBlob = new Blob(blobs, { type: "video/mp4" });
+            triggerSave(finalBlob);
+            if (onComplete) onComplete();
+          }
+        })
+        .catch((err) => {
+          console.error("[TG DL] Error:", err);
+          if (onError) onError(err.message);
+        });
     }
+
+    fetchNext();
   };
 
   function triggerSave(blob) {
@@ -114,9 +82,12 @@ if (!window.__TG_DL_LOADED) {
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
-    console.log("[TG DL] Download triggered:", a.download,
-      (blob.size / 1024 / 1024).toFixed(1) + "MB");
+    console.log(
+      "[TG DL] Saved:",
+      a.download,
+      (blob.size / 1024 / 1024).toFixed(1) + "MB"
+    );
   }
 
-  console.log("[TG DL] Core downloader loaded (parallel x" + PARALLEL + ")");
+  console.log("[TG DL] Core downloader loaded (sequential Range requests)");
 }
