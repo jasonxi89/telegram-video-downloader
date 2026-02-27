@@ -1,17 +1,10 @@
 {
   "manifest_version": 3,
   "name": "Telegram Video Downloader",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "description": "Download videos from Telegram Web (K and A versions)",
-  "permissions": ["downloads"],
+  "permissions": ["scripting"],
   "host_permissions": ["https://web.telegram.org/*"],
-  "content_scripts": [
-    {
-      "matches": ["https://web.telegram.org/*"],
-      "js": ["content.js"],
-      "run_at": "document_idle"
-    }
-  ],
   "background": {
     "service_worker": "background.js"
   },

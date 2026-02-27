@@ -1,16 +1,19 @@
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === "download") {
-    chrome.downloads.download({
-      url: message.url,
-      filename: message.filename || "telegram_video.mp4",
-      saveAs: message.saveAs !== false
-    }, (downloadId) => {
-      if (chrome.runtime.lastError) {
-        sendResponse({ success: false, error: chrome.runtime.lastError.message });
-      } else {
-        sendResponse({ success: true, downloadId });
-      }
-    });
-    return true;
-  }
+// Inject MAIN world scripts when Telegram Web pages load
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (changeInfo.status !== "complete" || !tab.url) return;
+  if (!tab.url.startsWith("https://web.telegram.org/")) return;
+
+  const isWebA = tab.url.includes("/a");
+  const isWebK = tab.url.includes("/k");
+  if (!isWebA && !isWebK) return;
+
+  const files = ["downloader.js"];
+  if (isWebA) files.push("inject_a.js");
+  if (isWebK) files.push("inject_k.js");
+
+  chrome.scripting.executeScript({
+    target: { tabId },
+    files,
+    world: "MAIN",
+  });
 });
