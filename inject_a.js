@@ -10,7 +10,7 @@ if (!window.__TG_DL_A_LOADED) {
   function createButton(onClick) {
     const btn = document.createElement("div");
     btn.className = DL_CLASS;
-    btn.textContent = "⬇ Download";
+    btn.textContent = "\u2b07 Download";
     btn.style.cssText =
       "display:inline-flex;align-items:center;gap:4px;" +
       "padding:5px 14px;margin-top:6px;border-radius:12px;cursor:pointer;" +
@@ -26,6 +26,7 @@ if (!window.__TG_DL_A_LOADED) {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
+      if (btn._completed) return;
       onClick(btn);
     });
     return btn;
@@ -35,26 +36,49 @@ if (!window.__TG_DL_A_LOADED) {
     const src = video.src || video.currentSrc;
     if (!src) return;
 
-    btn.textContent = "⏳ 0%";
+    btn.textContent = "\u23f3 0%";
     btn.style.pointerEvents = "none";
+    btn._completed = false;
 
     window.__TG_DL(src, {
       onProgress: (pct) => {
-        btn.textContent = "⏳ " + pct + "%";
+        btn.textContent = "\u23f3 " + pct + "%";
       },
       onComplete: () => {
-        btn.textContent = "✅ Done";
+        btn._completed = true;
         btn.style.pointerEvents = "";
-        setTimeout(() => {
-          btn.textContent = "⬇ Download";
-        }, 3000);
+        btn.innerHTML = "";
+
+        const done = document.createElement("span");
+        done.textContent = "\u2705 Done";
+        btn.appendChild(done);
+
+        const retry = document.createElement("span");
+        retry.textContent = "\ud83d\udd04";
+        retry.title = "Re-download";
+        retry.style.cssText =
+          "cursor:pointer;padding:2px 6px;margin-left:6px;border-radius:6px;" +
+          "transition:background 0.15s;";
+        retry.addEventListener("mouseenter", () => {
+          retry.style.background = "rgba(255,255,255,0.25)";
+        });
+        retry.addEventListener("mouseleave", () => {
+          retry.style.background = "transparent";
+        });
+        retry.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          startDownload(video, btn);
+        });
+        btn.appendChild(retry);
       },
       onError: (msg) => {
-        btn.textContent = "❌ Failed";
+        btn.textContent = "\u274c Failed";
         btn.style.pointerEvents = "";
+        btn._completed = false;
         console.error("[TG DL A]", msg);
         setTimeout(() => {
-          btn.textContent = "⬇ Download";
+          btn.textContent = "\u2b07 Download";
         }, 3000);
       },
     });
@@ -66,25 +90,45 @@ if (!window.__TG_DL_A_LOADED) {
     for (const video of videos) {
       const src = video.src || video.currentSrc;
       if (!src) continue;
+      if (video.__tgDl) continue;
 
-      // Find message container
       const msg =
         video.closest(".Message") ||
         video.closest(".message") ||
         video.closest("[class*='message']");
       if (!msg) continue;
-      if (msg.querySelector("." + DL_CLASS)) continue;
 
-      // Find the video wrapper to place button after
+      const albumItem = video.closest("[class*='album']");
       const wrapper =
+        albumItem ||
         video.closest(".media-inner") ||
         video.closest("[class*='VideoPlayer']") ||
         video.closest("[class*='media']") ||
         video.parentElement;
       if (!wrapper) continue;
 
+      // Dedup: also check if button already exists (React re-renders lose __tgDl)
+      const hasBtn = albumItem
+        ? albumItem.querySelector("." + DL_CLASS)
+        : wrapper.nextElementSibling &&
+          wrapper.nextElementSibling.classList.contains(DL_CLASS);
+      if (hasBtn) {
+        video.__tgDl = true;
+        continue;
+      }
+
+      video.__tgDl = true;
       const btn = createButton((b) => startDownload(video, b));
-      wrapper.after(btn);
+
+      if (albumItem) {
+        btn.style.cssText +=
+          ";position:absolute;bottom:4px;left:4px;z-index:5;" +
+          "margin-top:0;padding:3px 10px;font-size:12px;";
+        albumItem.style.position = "relative";
+        albumItem.appendChild(btn);
+      } else {
+        wrapper.after(btn);
+      }
     }
 
     // ── Media viewer overlay ──
