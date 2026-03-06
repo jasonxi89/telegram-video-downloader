@@ -21,8 +21,18 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 // ── Download state ──
-const downloads = {};
+let downloads = {};
 let popupPort = null;
+
+// Persist downloads to session storage (survives SW sleep)
+function saveState() {
+  chrome.storage.session.set({ downloads }).catch(() => {});
+}
+
+// Restore on SW wake
+chrome.storage.session.get("downloads", (data) => {
+  if (data.downloads) downloads = data.downloads;
+});
 
 function updateBadge() {
   const activeCount = Object.values(downloads).filter(
@@ -46,10 +56,8 @@ function sendToPopup(msg) {
 }
 
 function sendCommand(tabId, action, id) {
-  if (!tabId) return;
-  chrome.tabs
-    .sendMessage(tabId, { source: "tg-dl-cmd", action, id })
-    .catch(() => {});
+  if (!tabId) return Promise.reject(new Error("No tabId"));
+  return chrome.tabs.sendMessage(tabId, { source: "tg-dl-cmd", action, id });
 }
 
 // Status updates from content script
@@ -88,8 +96,15 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     downloads[id].offset = msg.offset;
     downloads[id].total = msg.total;
     downloads[id].pct = msg.pct;
-    downloads[id].speed = msg.speed;
     downloads[id].updatedAt = Date.now();
+
+    // Paused: ignore residual progress from in-flight chunk
+    if (downloads[id].status === "paused") {
+      downloads[id].speed = 0;
+      saveState();
+      return;
+    }
+    downloads[id].speed = msg.speed;
   } else if (type === "dl-complete") {
     if (downloads[id]) {
       downloads[id].status = "complete";
@@ -122,6 +137,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   }
 
   updateBadge();
+  saveState();
   if (type === "dl-cancel") {
     sendToPopup({ type: "dl-delete", id });
   } else if (downloads[id]) {
@@ -147,31 +163,31 @@ chrome.runtime.onConnect.addListener((port) => {
 
   port.postMessage({ type: "state-snapshot", downloads: { ...downloads } });
 
-  // Commands from popup
+  // Commands from popup — wait for confirmation, don't optimistically update
   port.onMessage.addListener((msg) => {
     const dl = downloads[msg.id];
 
     if (msg.action === "pause" && dl) {
-      sendCommand(dl.tabId, "pause", msg.id);
-      dl.status = "paused";
-      dl.speed = 0;
-      dl.updatedAt = Date.now();
-      updateBadge();
-      sendToPopup({ type: "dl-update", download: dl });
+      sendCommand(dl.tabId, "pause", msg.id).catch(() => {
+        // Command failed to reach downloader — notify popup
+        sendToPopup({ type: "dl-update", download: dl });
+      });
+      // Don't update status here — wait for dl-pause confirmation from downloader
     } else if (msg.action === "resume" && dl) {
-      sendCommand(dl.tabId, "resume", msg.id);
-      dl.status = "active";
-      dl.updatedAt = Date.now();
-      updateBadge();
-      sendToPopup({ type: "dl-update", download: dl });
+      sendCommand(dl.tabId, "resume", msg.id).catch(() => {
+        sendToPopup({ type: "dl-update", download: dl });
+      });
+      // Don't update status here — wait for dl-resume confirmation from downloader
     } else if (msg.action === "cancel") {
-      if (dl) sendCommand(dl.tabId, "cancel", msg.id);
+      if (dl) sendCommand(dl.tabId, "cancel", msg.id).catch(() => {});
       delete downloads[msg.id];
       updateBadge();
+      saveState();
       sendToPopup({ type: "dl-delete", id: msg.id });
     } else if (msg.action === "delete") {
       delete downloads[msg.id];
       updateBadge();
+      saveState();
       sendToPopup({ type: "dl-delete", id: msg.id });
     } else if (msg.action === "clear-completed") {
       for (const id of Object.keys(downloads)) {
@@ -180,6 +196,7 @@ chrome.runtime.onConnect.addListener((port) => {
         delete downloads[id];
       }
       updateBadge();
+      saveState();
       sendToPopup({ type: "state-snapshot", downloads: { ...downloads } });
     }
   });
