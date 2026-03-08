@@ -19,10 +19,10 @@ if (!window.__TG_DL_A_LOADED) {
       "background:rgba(51,144,236,0.85);" +
       "transition:background 0.15s;user-select:none;";
     btn.addEventListener("mouseenter", () => {
-      btn.style.background = "rgba(51,144,236,1)";
+      if (!btn._completed) btn.style.background = "rgba(51,144,236,1)";
     });
     btn.addEventListener("mouseleave", () => {
-      btn.style.background = "rgba(51,144,236,0.85)";
+      if (!btn._completed) btn.style.background = "rgba(51,144,236,0.85)";
     });
     btn.addEventListener("click", (e) => {
       e.preventDefault();
@@ -35,24 +35,32 @@ if (!window.__TG_DL_A_LOADED) {
 
   function markDone(btn, video) {
     btn._completed = true;
-    btn.style.pointerEvents = "";
     btn.innerHTML = "";
+    btn.style.padding = "0";
+    btn.style.background = "transparent";
+    btn.style.gap = "0";
+    btn.style.overflow = "hidden";
+    btn.style.pointerEvents = "";
 
     const done = document.createElement("span");
-    done.textContent = "\u2705 Done";
+    done.textContent = "\u2714 Done";
+    done.style.cssText =
+      "padding:5px 12px;background:rgba(55,178,77,0.85);color:#fff;" +
+      "font-size:13px;font-weight:500;line-height:18px;";
     btn.appendChild(done);
 
     const retry = document.createElement("span");
-    retry.textContent = "\ud83d\udd04";
-    retry.title = "Re-download";
+    retry.textContent = "Re-download";
     retry.style.cssText =
-      "cursor:pointer;padding:2px 8px;margin-left:2px;border-radius:6px;" +
-      "background:rgba(255,255,255,0.15);transition:background 0.15s;";
+      "padding:5px 12px;cursor:pointer;" +
+      "background:rgba(51,144,236,0.7);color:#fff;" +
+      "font-size:13px;font-weight:500;line-height:18px;" +
+      "transition:background 0.15s;";
     retry.addEventListener("mouseenter", () => {
-      retry.style.background = "rgba(255,255,255,0.25)";
+      retry.style.background = "rgba(51,144,236,1)";
     });
     retry.addEventListener("mouseleave", () => {
-      retry.style.background = "transparent";
+      retry.style.background = "rgba(51,144,236,0.7)";
     });
     retry.addEventListener("click", (e) => {
       e.preventDefault();
@@ -67,6 +75,10 @@ if (!window.__TG_DL_A_LOADED) {
     if (!src) return;
 
     btn.textContent = "\u23f3 0%";
+    btn.style.padding = "5px 14px";
+    btn.style.background = "rgba(51,144,236,0.85)";
+    btn.style.gap = "4px";
+    btn.style.overflow = "";
     btn.style.pointerEvents = "none";
     btn._completed = false;
 
