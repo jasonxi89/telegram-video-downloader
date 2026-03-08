@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "Telegram Video Downloader",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "Baixe videos do Telegram Web com facilidade.\n\nRecursos:\n• Botao de download aparece automaticamente abaixo de cada video no chat\n• Funciona nas versoes Web K e Web A do Telegram Web\n• Acompanhamento do progresso em tempo real com indicador de velocidade\n• Gerenciador de downloads em popup mostrando todos os downloads ativos e concluidos\n• Pause, retome e cancele downloads a qualquer momento\n• Baixe novamente videos concluidos com um clique\n• Suporte a albuns e mensagens com multiplos videos\n• Download no visualizador de midia em tela cheia\n• Nomeacao inteligente de arquivos usando os nomes originais do Telegram\n\nComo funciona:\nBasta abrir o Telegram Web (web.telegram.org) e um botao de download aparecera automaticamente abaixo de cada video. Clique para iniciar o download. Acompanhe o progresso pelo botao ou pelo painel popup da extensao.\n\nSem necessidade de conta. Sem servidores externos. Todos os downloads sao feitos diretamente no seu navegador.",
+    "description": "Extension description for Chrome Web Store"
+  }
+}

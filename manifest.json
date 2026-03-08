@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Telegram Video Downloader",
-  "version": "2.5.2",
-  "description": "Download videos from Telegram Web (K and A versions)",
+  "name": "__MSG_extName__",
+  "version": "2.6.0",
+  "description": "__MSG_extDescription__",
+  "default_locale": "en",
   "permissions": ["scripting", "storage"],
   "host_permissions": ["https://web.telegram.org/*"],
   "action": {
