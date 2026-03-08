@@ -6,6 +6,7 @@ if (!window.__TG_DL_K_LOADED) {
 
   const DL_CLASS = "tg-ext-dl";
   const POLL_MS = 600;
+  const COMPLETED_URLS = new Set();
 
   function createButton(onClick) {
     const btn = document.createElement("div");
@@ -32,6 +33,35 @@ if (!window.__TG_DL_K_LOADED) {
     return btn;
   }
 
+  function markDone(btn, video) {
+    btn._completed = true;
+    btn.style.pointerEvents = "";
+    btn.innerHTML = "";
+
+    const done = document.createElement("span");
+    done.textContent = "\u2705 Done";
+    btn.appendChild(done);
+
+    const retry = document.createElement("span");
+    retry.textContent = "\ud83d\udd04";
+    retry.title = "Re-download";
+    retry.style.cssText =
+      "cursor:pointer;padding:2px 8px;margin-left:2px;border-radius:6px;" +
+      "background:rgba(255,255,255,0.15);transition:background 0.15s;";
+    retry.addEventListener("mouseenter", () => {
+      retry.style.background = "rgba(255,255,255,0.25)";
+    });
+    retry.addEventListener("mouseleave", () => {
+      retry.style.background = "transparent";
+    });
+    retry.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      startDownload(video, btn);
+    });
+    btn.appendChild(retry);
+  }
+
   function startDownload(video, btn) {
     const src = video.src || video.currentSrc;
     if (!src) return;
@@ -45,32 +75,8 @@ if (!window.__TG_DL_K_LOADED) {
         btn.textContent = "\u23f3 " + pct + "%";
       },
       onComplete: () => {
-        btn._completed = true;
-        btn.style.pointerEvents = "";
-        btn.innerHTML = "";
-
-        const done = document.createElement("span");
-        done.textContent = "\u2705 Done";
-        btn.appendChild(done);
-
-        const retry = document.createElement("span");
-        retry.textContent = "\ud83d\udd04";
-        retry.title = "Re-download";
-        retry.style.cssText =
-          "cursor:pointer;padding:2px 6px;margin-left:6px;border-radius:6px;" +
-          "transition:background 0.15s;";
-        retry.addEventListener("mouseenter", () => {
-          retry.style.background = "rgba(255,255,255,0.25)";
-        });
-        retry.addEventListener("mouseleave", () => {
-          retry.style.background = "transparent";
-        });
-        retry.addEventListener("click", (e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          startDownload(video, btn);
-        });
-        btn.appendChild(retry);
+        COMPLETED_URLS.add(src);
+        markDone(btn, video);
       },
       onError: (msg) => {
         btn.textContent = "\u274c Failed";
@@ -116,6 +122,10 @@ if (!window.__TG_DL_K_LOADED) {
 
       video.__tgDl = true;
       const btn = createButton((b) => startDownload(video, b));
+
+      if (COMPLETED_URLS.has(src)) {
+        markDone(btn, video);
+      }
 
       if (albumItem) {
         btn.style.cssText +=
