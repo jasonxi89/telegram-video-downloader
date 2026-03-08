@@ -4,7 +4,7 @@
     "description": "Extension name"
   },
   "extDescription": {
-    "message": "Download videos from Telegram Web with ease.\n\nFeatures:\n• One-click download button appears below every video in chat\n• Works in both Web K and Web A versions of Telegram Web\n• Real-time progress tracking with speed display\n• Popup download manager showing all active and completed downloads\n• Pause, resume, and cancel downloads anytime\n• Re-download completed videos with one click\n• Album/multi-video message support\n• Full-screen media viewer download support\n• Smart file naming using original Telegram filenames\n\nHow it works:\nSimply open Telegram Web (web.telegram.org) and a download button will automatically appear below each video. Click to start downloading. Track progress via the button or the extension popup panel.\n\nNo account required. No external servers. All downloads happen directly in your browser.",
+    "message": "Download videos from Telegram Web with one click. Progress tracking, pause/resume, and smart file naming.",
     "description": "Extension description for Chrome Web Store"
   }
 }

@@ -4,7 +4,7 @@
     "description": "Extension name"
   },
   "extDescription": {
-    "message": "Telechargez facilement des videos depuis Telegram Web.\n\nFonctionnalites :\n• Un bouton de telechargement apparait automatiquement sous chaque video dans le chat\n• Compatible avec les versions Web K et Web A de Telegram Web\n• Suivi de la progression en temps reel avec affichage de la vitesse\n• Gestionnaire de telechargements en popup pour visualiser tous les telechargements\n• Mettez en pause, reprenez et annulez vos telechargements a tout moment\n• Relancez le telechargement des videos terminees en un clic\n• Prise en charge des albums et des messages multi-videos\n• Telechargement depuis le lecteur multimedia en plein ecran\n• Nommage intelligent des fichiers utilisant les noms originaux de Telegram\n\nComment ca marche :\nOuvrez simplement Telegram Web (web.telegram.org) et un bouton de telechargement apparaitra automatiquement sous chaque video. Cliquez pour lancer le telechargement. Suivez la progression via le bouton ou le panneau popup de l'extension.\n\nAucun compte requis. Aucun serveur externe. Tous les telechargements s'effectuent directement dans votre navigateur.",
+    "message": "Téléchargez des vidéos depuis Telegram Web en un clic. Suivi de progression, pause/reprise et nommage intelligent.",
     "description": "Extension description for Chrome Web Store"
   }
 }

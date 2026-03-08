@@ -4,7 +4,7 @@
     "description": "Extension name"
   },
   "extDescription": {
-    "message": "從 Telegram Web 輕鬆下載影片。\n\n功能特色：\n• 聊天中每部影片下方自動顯示下載按鈕，一鍵下載\n• 同時支援 Web K 和 Web A 兩個版本\n• 即時顯示下載進度與速度\n• 彈出式下載管理面板，檢視所有下載任務\n• 隨時暫停、繼續、取消下載\n• 已下載的影片可一鍵重新下載\n• 支援相簿／多影片訊息\n• 支援全螢幕媒體檢視器內下載\n• 智慧檔名命名，使用 Telegram 原始檔名\n\n使用方式：\n開啟 Telegram Web（web.telegram.org），每部影片下方會自動出現下載按鈕。點擊即可開始下載，透過按鈕或擴充功能彈出面板查看進度。\n\n無需帳號，無外部伺服器，所有下載皆在瀏覽器本機完成。",
+    "message": "一鍵下載 Telegram Web 影片。支援下載進度追蹤、暫停恢復、智慧檔案命名。",
     "description": "Extension description for Chrome Web Store"
   }
 }

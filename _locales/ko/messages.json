@@ -4,7 +4,7 @@
     "description": "Extension name"
   },
   "extDescription": {
-    "message": "Telegram Web에서 동영상을 간편하게 다운로드하세요.\n\n주요 기능:\n• 채팅의 모든 동영상 아래에 원클릭 다운로드 버튼 자동 표시\n• Web K 및 Web A 버전 모두 지원\n• 실시간 다운로드 진행률 및 속도 표시\n• 팝업 다운로드 관리자에서 모든 다운로드 현황 확인\n• 언제든지 일시정지, 재개, 취소 가능\n• 다운로드 완료된 동영상 원클릭 재다운로드\n• 앨범/다중 동영상 메시지 지원\n• 전체 화면 미디어 뷰어 내 다운로드 지원\n• Telegram 원본 파일명을 활용한 스마트 파일 이름 지정\n\n사용 방법:\nTelegram Web(web.telegram.org)을 열면 각 동영상 아래에 다운로드 버튼이 자동으로 나타납니다. 클릭하면 바로 다운로드가 시작됩니다. 버튼 또는 확장 프로그램 팝업 패널에서 진행 상황을 확인하세요.\n\n계정 가입 불필요. 외부 서버 없음. 모든 다운로드는 브라우저에서 직접 처리됩니다.",
+    "message": "Telegram Web에서 원클릭으로 동영상 다운로드. 진행률 추적, 일시정지/재개, 스마트 파일 이름 지정 지원.",
     "description": "Extension description for Chrome Web Store"
   }
 }
