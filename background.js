@@ -24,14 +24,30 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 let downloads = {};
 let popupPort = null;
 
-// Persist downloads to session storage (survives SW sleep)
+// Persist downloads to local storage (survives browser restart)
 function saveState() {
-  chrome.storage.session.set({ downloads }).catch(() => {});
+  chrome.storage.local.set({ downloads }).catch(() => {});
 }
 
-// Restore on SW wake
-chrome.storage.session.get("downloads", (data) => {
-  if (data.downloads) downloads = data.downloads;
+// Restore on startup — mark stale active/paused as interrupted
+chrome.storage.local.get("downloads", (data) => {
+  if (!data.downloads) return;
+  downloads = data.downloads;
+  const now = Date.now();
+  let changed = false;
+  for (const dl of Object.values(downloads)) {
+    if (
+      (dl.status === "active" || dl.status === "paused") &&
+      now - dl.updatedAt > 60000
+    ) {
+      dl.status = "error";
+      dl.error = "Download interrupted";
+      dl.speed = 0;
+      changed = true;
+    }
+  }
+  updateBadge();
+  if (changed) saveState();
 });
 
 function updateBadge() {
