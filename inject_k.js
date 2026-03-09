@@ -9,8 +9,17 @@ if (!window.__TG_DL_K_LOADED) {
   const COMPLETED_URLS = new Set();
 
   function getVideoKey(src) {
-    const match = src.match(/document(\d+)/);
-    return match ? "doc:" + match[1] : src;
+    // Web A: /progressive/document{ID}
+    const docMatch = src.match(/document(\d+)/);
+    if (docMatch) return "doc:" + docMatch[1];
+    // Web K: stream/{URL-encoded JSON} with location.id
+    if (src.includes("stream/")) {
+      try {
+        const json = JSON.parse(decodeURIComponent(src.split("stream/")[1]));
+        if (json.location && json.location.id) return "doc:" + json.location.id;
+      } catch {}
+    }
+    return src;
   }
 
   function createButton(onClick) {

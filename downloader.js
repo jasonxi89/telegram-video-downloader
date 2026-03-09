@@ -109,7 +109,8 @@ if (!window.__TG_DL_LOADED) {
           if (match) {
             offset = parseInt(match[2]) + 1;
             total = parseInt(match[3]);
-          } else if (res.status === 200 && offset === 0) {
+          } else if (res.status === 200) {
+            // No Content-Range: server ignored Range header, treat as full response
             total = parseInt(res.headers.get("Content-Length")) || 0;
             offset = total;
           }

@@ -5,8 +5,9 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" || !tab.url) return;
   if (!tab.url.startsWith("https://web.telegram.org/")) return;
 
-  const isWebA = tab.url.includes("/a");
-  const isWebK = tab.url.includes("/k");
+  const path = new URL(tab.url).pathname;
+  const isWebA = path.startsWith("/a");
+  const isWebK = path.startsWith("/k");
   if (!isWebA && !isWebK) return;
 
   const files = ["downloader.js"];
@@ -33,8 +34,30 @@ let downloads = {};
 let completedUrls = [];
 let popupPort = null;
 
-// Persist state to local storage (survives browser restart)
+function extractDocKey(url) {
+  if (!url) return url;
+  const m = url.match(/document(\d+)/);
+  if (m) return "doc:" + m[1];
+  if (url.includes("stream/")) {
+    try {
+      const json = JSON.parse(decodeURIComponent(url.split("stream/")[1]));
+      if (json.location && json.location.id) return "doc:" + json.location.id;
+    } catch {}
+  }
+  return url;
+}
+
+// Persist state to local storage — throttled to max once per 2s
+let saveTimer = null;
 function saveState() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
+    saveTimer = null;
+  }, 2000);
+}
+function saveStateNow() {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
 }
 
@@ -61,7 +84,7 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
     downloads = { ...data.downloads, ...downloads };
   }
   updateBadge();
-  saveState();
+  saveStateNow();
 });
 
 function updateBadge() {
@@ -147,8 +170,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       // Persist completed URL for inline button state (normalize to doc ID)
       const dlUrl = downloads[id].url;
       if (dlUrl) {
-        const m = dlUrl.match(/document(\d+)/);
-        const key = m ? "doc:" + m[1] : dlUrl;
+        const key = extractDocKey(dlUrl);
         if (!completedUrls.includes(key)) {
           completedUrls.push(key);
           if (completedUrls.length > 500) completedUrls.shift();
@@ -178,7 +200,11 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
   }
 
   updateBadge();
-  saveState();
+  if (type === "dl-progress") {
+    saveState(); // throttled
+  } else {
+    saveStateNow(); // immediate for status transitions
+  }
   if (type === "dl-cancel") {
     sendToPopup({ type: "dl-delete", id });
   } else if (downloads[id]) {
@@ -223,12 +249,12 @@ chrome.runtime.onConnect.addListener((port) => {
       if (dl) sendCommand(dl.tabId, "cancel", msg.id).catch(() => {});
       delete downloads[msg.id];
       updateBadge();
-      saveState();
+      saveStateNow();
       sendToPopup({ type: "dl-delete", id: msg.id });
     } else if (msg.action === "delete") {
       delete downloads[msg.id];
       updateBadge();
-      saveState();
+      saveStateNow();
       sendToPopup({ type: "dl-delete", id: msg.id });
     } else if (msg.action === "clear-completed") {
       for (const id of Object.keys(downloads)) {
@@ -238,7 +264,7 @@ chrome.runtime.onConnect.addListener((port) => {
       }
       completedUrls = [];
       updateBadge();
-      saveState();
+      saveStateNow();
       sendToPopup({ type: "state-snapshot", downloads: { ...downloads } });
     }
   });
