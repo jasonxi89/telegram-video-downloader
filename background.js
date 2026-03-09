@@ -140,11 +140,15 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       downloads[id].filename = msg.filename;
       downloads[id].total = msg.total;
       downloads[id].updatedAt = Date.now();
-      // Persist completed URL for inline button state
+      // Persist completed URL for inline button state (normalize to doc ID)
       const dlUrl = downloads[id].url;
-      if (dlUrl && !completedUrls.includes(dlUrl)) {
-        completedUrls.push(dlUrl);
-        if (completedUrls.length > 500) completedUrls.shift();
+      if (dlUrl) {
+        const m = dlUrl.match(/document(\d+)/);
+        const key = m ? "doc:" + m[1] : dlUrl;
+        if (!completedUrls.includes(key)) {
+          completedUrls.push(key);
+          if (completedUrls.length > 500) completedUrls.shift();
+        }
       }
     }
   } else if (type === "dl-error") {

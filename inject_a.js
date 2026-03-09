@@ -8,6 +8,11 @@ if (!window.__TG_DL_A_LOADED) {
   const POLL_MS = 600;
   const COMPLETED_URLS = new Set();
 
+  function getVideoKey(src) {
+    const match = src.match(/document(\d+)/);
+    return match ? "doc:" + match[1] : src;
+  }
+
   function createButton(onClick) {
     const btn = document.createElement("div");
     btn.className = DL_CLASS;
@@ -87,7 +92,7 @@ if (!window.__TG_DL_A_LOADED) {
         btn.textContent = "\u23f3 " + pct + "%";
       },
       onComplete: () => {
-        COMPLETED_URLS.add(src);
+        COMPLETED_URLS.add(getVideoKey(src));
         markDone(btn, video);
       },
       onError: (msg) => {
@@ -138,7 +143,7 @@ if (!window.__TG_DL_A_LOADED) {
       video.__tgDl = true;
       const btn = createButton((b) => startDownload(video, b));
 
-      if (COMPLETED_URLS.has(src)) {
+      if (COMPLETED_URLS.has(getVideoKey(src))) {
         markDone(btn, video);
       }
 
@@ -199,7 +204,7 @@ if (!window.__TG_DL_A_LOADED) {
     if (event.source !== window) return;
     if (event.data?.source === "tg-dl-init" && event.data.completedUrls) {
       for (const url of event.data.completedUrls) {
-        COMPLETED_URLS.add(url);
+        COMPLETED_URLS.add(getVideoKey(url));
       }
     }
   });
