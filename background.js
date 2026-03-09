@@ -38,26 +38,30 @@ function saveState() {
   chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
 }
 
-// Restore on startup
+// Restore on startup — merge with any entries added during async gap
 chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
-  if (data.completedUrls) completedUrls = data.completedUrls;
-  if (!data.downloads) return;
-  downloads = data.downloads;
-  const now = Date.now();
-  let changed = false;
-  for (const dl of Object.values(downloads)) {
-    if (
-      (dl.status === "active" || dl.status === "paused") &&
-      now - dl.updatedAt > 60000
-    ) {
-      dl.status = "error";
-      dl.error = "Download interrupted";
-      dl.speed = 0;
-      changed = true;
+  if (data.completedUrls) {
+    for (const u of data.completedUrls) {
+      if (!completedUrls.includes(u)) completedUrls.push(u);
     }
   }
+  if (data.downloads) {
+    const now = Date.now();
+    for (const dl of Object.values(data.downloads)) {
+      if (
+        (dl.status === "active" || dl.status === "paused") &&
+        now - dl.updatedAt > 60000
+      ) {
+        dl.status = "error";
+        dl.error = "Download interrupted";
+        dl.speed = 0;
+      }
+    }
+    // Merge: stored entries first, then any new ones added during async restore
+    downloads = { ...data.downloads, ...downloads };
+  }
   updateBadge();
-  if (changed) saveState();
+  saveState();
 });
 
 function updateBadge() {
