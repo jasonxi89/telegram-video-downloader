@@ -7,6 +7,7 @@ if (!window.__TG_DL_K_LOADED) {
   const DL_CLASS = "tg-ext-dl";
   const POLL_MS = 600;
   const COMPLETED_URLS = new Set();
+  const ACTIVE_DOWNLOADS = new Set();
 
   function getVideoKey(src) {
     // Web A: /progressive/document{ID}
@@ -88,6 +89,14 @@ if (!window.__TG_DL_K_LOADED) {
     const src = video.src || video.currentSrc;
     if (!src) return;
 
+    const key = getVideoKey(src);
+    if (ACTIVE_DOWNLOADS.has(key)) {
+      btn.textContent = "\u23f3 Downloading...";
+      btn.style.pointerEvents = "none";
+      return;
+    }
+    ACTIVE_DOWNLOADS.add(key);
+
     btn.textContent = "\u23f3 0%";
     btn.style.padding = "5px 14px";
     btn.style.background = "rgba(51,144,236,0.85)";
@@ -101,10 +110,12 @@ if (!window.__TG_DL_K_LOADED) {
         btn.textContent = "\u23f3 " + pct + "%";
       },
       onComplete: () => {
-        COMPLETED_URLS.add(getVideoKey(src));
+        ACTIVE_DOWNLOADS.delete(key);
+        COMPLETED_URLS.add(key);
         markDone(btn, video);
       },
       onError: (msg) => {
+        ACTIVE_DOWNLOADS.delete(key);
         btn.textContent = "\u274c Failed";
         btn.style.pointerEvents = "";
         btn._completed = false;
@@ -149,8 +160,12 @@ if (!window.__TG_DL_K_LOADED) {
       video.__tgDl = true;
       const btn = createButton((b) => startDownload(video, b));
 
-      if (COMPLETED_URLS.has(getVideoKey(src))) {
+      const scanKey = getVideoKey(src);
+      if (COMPLETED_URLS.has(scanKey)) {
         markDone(btn, video);
+      } else if (ACTIVE_DOWNLOADS.has(scanKey)) {
+        btn.textContent = "\u23f3 Downloading...";
+        btn.style.pointerEvents = "none";
       }
 
       if (albumItem) {
