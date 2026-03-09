@@ -88,7 +88,7 @@ if (!window.__TG_DL_LOADED) {
       fetchNext: null,
     };
 
-    postStatus("dl-start", { id, filename, total: 0 });
+    postStatus("dl-start", { id, filename, url, total: 0 });
 
     function fetchNext() {
       if (dlState.paused || dlState.cancelled) return;

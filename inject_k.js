@@ -196,6 +196,16 @@ if (!window.__TG_DL_K_LOADED) {
     }
   }
 
+  // Restore completed URLs from background (persisted across restarts)
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    if (event.data?.source === "tg-dl-init" && event.data.completedUrls) {
+      for (const url of event.data.completedUrls) {
+        COMPLETED_URLS.add(url);
+      }
+    }
+  });
+
   setInterval(scan, POLL_MS);
   console.log("[TG DL] Web K injector loaded");
 }

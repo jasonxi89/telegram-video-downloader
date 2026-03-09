@@ -13,24 +13,34 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (isWebA) files.push("inject_a.js");
   if (isWebK) files.push("inject_k.js");
 
-  chrome.scripting.executeScript({
-    target: { tabId },
-    files,
-    world: "MAIN",
-  });
+  chrome.scripting
+    .executeScript({ target: { tabId }, files, world: "MAIN" })
+    .then(() => {
+      if (completedUrls.length > 0) {
+        chrome.tabs
+          .sendMessage(tabId, {
+            source: "tg-dl-init",
+            completedUrls,
+          })
+          .catch(() => {});
+      }
+    })
+    .catch(() => {});
 });
 
 // ── Download state ──
 let downloads = {};
+let completedUrls = [];
 let popupPort = null;
 
-// Persist downloads to local storage (survives browser restart)
+// Persist state to local storage (survives browser restart)
 function saveState() {
-  chrome.storage.local.set({ downloads }).catch(() => {});
+  chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
 }
 
-// Restore on startup — mark stale active/paused as interrupted
-chrome.storage.local.get("downloads", (data) => {
+// Restore on startup
+chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
+  if (data.completedUrls) completedUrls = data.completedUrls;
   if (!data.downloads) return;
   downloads = data.downloads;
   const now = Date.now();
@@ -87,6 +97,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     downloads[id] = {
       id,
       filename: msg.filename,
+      url: msg.url || "",
       status: "active",
       offset: 0,
       total: 0,
@@ -129,6 +140,12 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       downloads[id].filename = msg.filename;
       downloads[id].total = msg.total;
       downloads[id].updatedAt = Date.now();
+      // Persist completed URL for inline button state
+      const dlUrl = downloads[id].url;
+      if (dlUrl && !completedUrls.includes(dlUrl)) {
+        completedUrls.push(dlUrl);
+        if (completedUrls.length > 500) completedUrls.shift();
+      }
     }
   } else if (type === "dl-error") {
     if (downloads[id]) {
@@ -211,6 +228,7 @@ chrome.runtime.onConnect.addListener((port) => {
         if (status === "active" || status === "paused") continue;
         delete downloads[id];
       }
+      completedUrls = [];
       updateBadge();
       saveState();
       sendToPopup({ type: "state-snapshot", downloads: { ...downloads } });

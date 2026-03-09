@@ -7,8 +7,8 @@ window.addEventListener("message", (event) => {
   chrome.runtime.sendMessage(event.data);
 });
 
-// Downward: background → MAIN (control commands)
+// Downward: background → MAIN (control commands + init data)
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.source !== "tg-dl-cmd") return;
+  if (msg.source !== "tg-dl-cmd" && msg.source !== "tg-dl-init") return;
   window.postMessage(msg, "*");
 });
