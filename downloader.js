@@ -141,7 +141,7 @@ if (!window.__TG_DL_LOADED) {
             const finalBlob = new Blob(blobs, { type: "video/mp4" });
             triggerSave(finalBlob, filename);
             if (onComplete) onComplete();
-            postStatus("dl-complete", { id, filename, total: finalBlob.size });
+            postStatus("dl-complete", { id, filename, url, total: finalBlob.size });
             delete window.__TG_DL_ACTIVE[id];
           }
         })

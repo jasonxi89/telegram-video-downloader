@@ -201,12 +201,32 @@ if (!window.__TG_DL_K_LOADED) {
     }
   }
 
-  // Restore completed URLs from background (persisted across restarts)
+  // Listen for messages from background / download engine
   window.addEventListener("message", (event) => {
-    if (event.source !== window) return;
-    if (event.data?.source === "tg-dl-init" && event.data.completedUrls) {
+    if (event.source !== window || !event.data) return;
+
+    // Restore completed URLs on page load (persisted across restarts)
+    if (event.data.source === "tg-dl-init" && event.data.completedUrls) {
       for (const url of event.data.completedUrls) {
         COMPLETED_URLS.add(getVideoKey(url));
+      }
+    }
+
+    // Real-time: update visible buttons when a download completes
+    if (
+      event.data.source === "tg-dl" &&
+      event.data.type === "dl-complete" &&
+      event.data.url
+    ) {
+      const key = getVideoKey(event.data.url);
+      COMPLETED_URLS.add(key);
+      for (const video of document.querySelectorAll("video")) {
+        const src = video.src || video.currentSrc;
+        if (!src || getVideoKey(src) !== key) continue;
+        const root =
+          video.closest(".album-item") || video.closest(".bubble");
+        const btn = root && root.querySelector("." + DL_CLASS);
+        if (btn && !btn._completed) markDone(btn, video);
       }
     }
   });
