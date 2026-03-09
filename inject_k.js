@@ -236,6 +236,27 @@ if (!window.__TG_DL_K_LOADED) {
       }
     }
 
+    // Real-time: sync progress to all buttons with same document ID
+    if (
+      event.data.source === "tg-dl" &&
+      event.data.type === "dl-progress" &&
+      event.data.url
+    ) {
+      const key = getVideoKey(event.data.url);
+      const pct = event.data.pct || 0;
+      for (const video of document.querySelectorAll("video")) {
+        const src = video.src || video.currentSrc;
+        if (!src || getVideoKey(src) !== key) continue;
+        const root =
+          video.closest(".album-item") || video.closest(".bubble");
+        const btn = root && root.querySelector("." + DL_CLASS);
+        if (btn && !btn._completed && btn.textContent !== "\u23f3 " + pct + "%") {
+          btn.textContent = "\u23f3 " + pct + "%";
+          btn.style.pointerEvents = "none";
+        }
+      }
+    }
+
     // Real-time: update visible buttons when a download completes
     if (
       event.data.source === "tg-dl" &&

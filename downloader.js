@@ -128,7 +128,7 @@ if (!window.__TG_DL_LOADED) {
             : 0;
 
           if (onProgress && total) onProgress(pct);
-          postStatus("dl-progress", { id, offset, total, pct, speed });
+          postStatus("dl-progress", { id, url, offset, total, pct, speed });
 
           return res.blob();
         })
