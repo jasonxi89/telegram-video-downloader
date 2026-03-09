@@ -33,14 +33,29 @@ let downloads = {};
 let completedUrls = [];
 let popupPort = null;
 
-// Persist state to local storage (survives browser restart)
+// Persist downloads to local storage (survives browser restart)
 function saveState() {
-  chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
+  chrome.storage.local.set({ downloads }).catch(() => {});
+}
+
+function urlKey(url) {
+  const m = url && url.match(/document(\d+)/);
+  return m ? "doc:" + m[1] : url || "";
+}
+
+// Rebuild completedUrls from downloads (single source of truth)
+function rebuildCompletedUrls() {
+  completedUrls = [];
+  for (const dl of Object.values(downloads)) {
+    if (dl.status === "complete" && dl.url) {
+      const key = urlKey(dl.url);
+      if (key && !completedUrls.includes(key)) completedUrls.push(key);
+    }
+  }
 }
 
 // Restore on startup
-chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
-  if (data.completedUrls) completedUrls = data.completedUrls;
+chrome.storage.local.get("downloads", (data) => {
   if (!data.downloads) return;
   downloads = data.downloads;
   const now = Date.now();
@@ -56,6 +71,7 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
       changed = true;
     }
   }
+  rebuildCompletedUrls();
   updateBadge();
   if (changed) saveState();
 });
@@ -140,16 +156,8 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       downloads[id].filename = msg.filename;
       downloads[id].total = msg.total;
       downloads[id].updatedAt = Date.now();
-      // Persist completed URL for inline button state (normalize to doc ID)
-      const dlUrl = downloads[id].url;
-      if (dlUrl) {
-        const m = dlUrl.match(/document(\d+)/);
-        const key = m ? "doc:" + m[1] : dlUrl;
-        if (!completedUrls.includes(key)) {
-          completedUrls.push(key);
-          if (completedUrls.length > 500) completedUrls.shift();
-        }
-      }
+      const key = urlKey(downloads[id].url);
+      if (key && !completedUrls.includes(key)) completedUrls.push(key);
     }
   } else if (type === "dl-error") {
     if (downloads[id]) {
@@ -222,6 +230,12 @@ chrome.runtime.onConnect.addListener((port) => {
       saveState();
       sendToPopup({ type: "dl-delete", id: msg.id });
     } else if (msg.action === "delete") {
+      const delDl = downloads[msg.id];
+      if (delDl && delDl.url) {
+        const key = urlKey(delDl.url);
+        const idx = completedUrls.indexOf(key);
+        if (idx !== -1) completedUrls.splice(idx, 1);
+      }
       delete downloads[msg.id];
       updateBadge();
       saveState();
