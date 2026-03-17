@@ -126,11 +126,24 @@ listEl.addEventListener("click", (e) => {
   const btn = e.target.closest(".dl-btn");
   if (!btn) return;
   const { action, id } = btn.dataset;
+  // delete = finished item (error/complete): safe to remove immediately
+  // cancel = active download: must wait for background to abort first
+  if (action === "delete") {
+    delete downloads[id];
+    render();
+  }
   port.postMessage({ action, id });
 });
 
-// Clear completed / errored downloads
+// Clear completed / errored downloads — optimistic, only touches finished items
 clearBtn.addEventListener("click", () => {
+  for (const id of Object.keys(downloads)) {
+    const status = downloads[id].status;
+    if (status !== "active" && status !== "paused") {
+      delete downloads[id];
+    }
+  }
+  render();
   port.postMessage({ action: "clear-completed" });
 });
 
