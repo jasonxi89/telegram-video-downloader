@@ -10,7 +10,7 @@ Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支�
 ## 当前状态
 - 版本 **v2.10.0**（基于已实机验证可正常下载的 v2.9.3 working baseline 做 P0 hardening）
 - 功能可用：聊天内 + 全屏查看器下载按钮、下载进度显示、Popup 下载队列面板（进度/速度/文件名）、Badge 显示活跃下载数、暂停/恢复/取消/删除、Done 条目保留 + 重下载、album 多视频、同一视频多按钮进度同步、防重复下载
-- v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、Web K 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义
+- v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、inline/album 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义；**Web K viewer 按钮状态同步仍未解决**（实测 viewer blob 为 MSE，见 TODO）
 - `postMessage` 已加入 origin/type/schema/sender/tab ownership 校验，但 MAIN world 与 Telegram 页面同信任域，真正的通道认证及公开 `window.__TG_DL` API 收口仍待设计；P1/P2 其余清单见下方
 - 当前开发分支：`fix/p0-reliability-security`
 
@@ -51,7 +51,7 @@ icons/           16/48/128 png
 ### P0 — 可确定触发
 - [x] 暂停/恢复竞态：v2.10.0 增加 per-download `inFlight` guard + per-request AbortController；pause 允许当前 chunk 安全收尾但不启下一块，resume 幂等且不会产生并发 fetch 链
 - [x] 全屏查看器悬浮按钮失控：v2.10.0 改为单按钮轮询生命周期，不再为 fallback 创建独立 watcher interval；关闭 Viewer 自动清理
-- [x] 全屏按钮状态不同步：v2.10.0 统一按 video key 同步 inline/viewer 的 active/progress/complete/error/cancel；Web K 优先从 inline `stream/{JSON}` 提取 document id/size；Viewer `blob:` 只请求 `bytes=0-0`，由 Content-Range 总大小 + duration + video dimensions 媒体签名映射回 document key（签名冲突则保守回退），并在切换媒体时实时解析当前 active video
+- [ ] 全屏按钮状态不同步（**Web K viewer 仍未解决**）：v2.10.0 的签名桥接（inline `stream/{JSON}` 注册 size+duration+dimensions 签名 → Viewer blob 1-byte Range probe 反查）经 2026-07-23 Playwright 实测**在真实环境不生效**：①Viewer blob 是 MediaSource object URL，fetch 带不带 Range 都直接 "Failed to fetch"，probe 100% 走 catch 降级；②Viewer 播放不同清晰度层（实测 inline 1920×1920 / viewer 1080×1080），签名维度也不匹配。降级安全（回到无同步的旧行为），inline/album 间的 key 同步有效。正确修法见 issue：Viewer 打开时刻从来源 bubble 捕获消息身份注册 `viewerBlobSrc → key`，不要从 blob 内容推导
 - [x] XSS/HTML 注入：v2.10.0 Popup 全面改用 createElement/textContent、状态白名单与 pct 数值 clamp，不再拼 innerHTML
 - [ ] postMessage 桥认证：v2.10.0 已完成显式 origin、消息 type/schema、Telegram sender URL、tab ownership 校验；但同源 Telegram 页面仍能观察/伪造 MAIN-world 消息，`window.__TG_DL` 仍公开，需另行设计真正认证边界
 - [x] 扩展 reload 后消息桥静默死亡：v2.10.0 content bridge 增加失败上报和 generation guard，SW 在 install/startup 为现有 Telegram tabs 重新注入 bridge
@@ -79,8 +79,9 @@ icons/           16/48/128 png
 - [x] Viewer stale-click：Web K/A 点击时实时查询 active viewer video，不再信任最多 600ms 前的 `btn._video`
 - [x] Cancel timer suspend：持久化 `cancelling`，SW 恢复和 Popup stale sweep 可确定转 error，并立即写回 storage
 - [x] Minor：移除无人监听的 bridge-error 页面消息、下载 ID 固定补齐 6 位、content origin 改为动态同源、本文档补充 cancel timer 说明
-- [x] `f373ea4` 复审 blocker：针对真实 `stream` inline / `blob` Viewer 增加 1-byte Range probe；用 total size + duration + dimensions 强签名同步 doc key/progress/Done，冲突、metadata 缺失、non-206 或 malformed Content-Range 均安全回退
-- [ ] 登录态手测 gate：agent 环境不可访问 `web.telegram.org`，不得再尝试；由用户确认部署中的 blob Content-Range total 等于 stream metadata size、inline metadata 可用，并完成 PR 描述的 7 项 Chrome 手测
+- [x] `f373ea4` 复审 blocker → `5d483d6` 签名桥接实现正确但**实测假设不成立**（2026-07-23 Playwright 登录态实测 @TelegramTips：viewer blob 为 MSE 不可 fetch + viewer/inline 清晰度层不同）；决定按选项 A：重标 P0 同步项为 open，机制保留（对 inline/album key 稳定有价值），viewer 同步转 follow-up issue
+- [x] 登录态实测（2026-07-23，Playwright + 用户扫码）：确认 Web K inline=`stream/{JSON}`、viewer=MSE blob（不可 fetch）；**自定义 viewer 按钮 fetch blob 永远无法下载流式视频（v2.9.3 baseline 亦然），unhide 原生下载按钮是 viewer 唯一可靠下载路径**
+- [ ] 装扩展后的 7 项 Chrome 功能手测（PR 描述清单）：仍需用户完成后 release
 
 修复时按 P0 → P1 → P2 顺序；每批修完 bump manifest.json 版本 + 更新本文档和项目 memory。任何下载核心改动必须保留 v2.9.3 已实机验证 working 的 MAIN-world + 顺序 Range baseline，异常 hardening 需用定向回归证明不改变正常响应路径。
 
