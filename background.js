@@ -103,6 +103,11 @@ function isDownloadUrl(value) {
   }
 }
 
+function isDownloadKey(value) {
+  if (typeof value !== "string" || value.length > 8192) return false;
+  return /^(?:doc:\d+|msg:-?\d+:-?\d+)$/.test(value) || isDownloadUrl(value);
+}
+
 function finiteNumber(value, fallback = 0) {
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? number : fallback;
@@ -110,7 +115,9 @@ function finiteNumber(value, fallback = 0) {
 
 function normalizeStatusMessage(rawMsg, sender) {
   const senderUrl = sender.url || (sender.tab && sender.tab.url);
-  if (!sender.tab || !telegramVariant(senderUrl)) return null;
+  if (!sender.tab || (sender.frameId ?? 0) !== 0 || !telegramVariant(senderUrl)) {
+    return null;
+  }
   if (!rawMsg || rawMsg.source !== "tg-dl" || !STATUS_TYPES.has(rawMsg.type)) {
     return null;
   }
@@ -122,6 +129,7 @@ function normalizeStatusMessage(rawMsg, sender) {
   if (typeof rawMsg.url === "string" && isDownloadUrl(rawMsg.url)) {
     msg.url = rawMsg.url;
   }
+  if (isDownloadKey(rawMsg.key)) msg.key = rawMsg.key;
   if (
     (rawMsg.type === "dl-start" ||
       rawMsg.type === "dl-progress" ||
@@ -184,7 +192,9 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
       for (const dl of Object.values(data.downloads)) {
         if (
           dl &&
-          (dl.status === "active" || dl.status === "paused") &&
+          (dl.status === "active" ||
+            dl.status === "paused" ||
+            dl.status === "cancelling") &&
           now - dl.updatedAt > 60000
         ) {
           dl.status = "error";
@@ -251,7 +261,14 @@ function markCancelFailed(id, error) {
 }
 
 function requestCancel(dl) {
-  if (pendingCancelTimers.has(dl.id)) return;
+  if (pendingCancelTimers.has(dl.id) || dl.status === "cancelling") return;
+  dl.status = "cancelling";
+  dl.speed = 0;
+  dl.updatedAt = Date.now();
+  updateBadge();
+  saveStateNow();
+  sendToPopup({ type: "dl-update", download: dl });
+
   const timer = setTimeout(() => {
     markCancelFailed(dl.id, "Cancel was not confirmed by the page");
   }, 2000);
@@ -281,6 +298,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
       id,
       filename: msg.filename,
       url: msg.url || "",
+      key: msg.key || extractDocKey(msg.url),
       status: "active",
       offset: 0,
       total: 0,
@@ -295,6 +313,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
         id,
         filename: "unknown_video.mp4",
         url: msg.url,
+        key: msg.key || extractDocKey(msg.url),
         status: "active",
         offset: 0,
         total: 0,
@@ -304,6 +323,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
         updatedAt: Date.now(),
       };
     }
+    if (!downloads[id].key && msg.key) downloads[id].key = msg.key;
     downloads[id].offset = msg.offset;
     downloads[id].total = msg.total;
     downloads[id].pct = msg.pct;
@@ -318,6 +338,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
     downloads[id].speed = msg.speed;
   } else if (type === "dl-complete") {
     if (downloads[id]) {
+      if (!downloads[id].key && msg.key) downloads[id].key = msg.key;
       downloads[id].status = "complete";
       downloads[id].pct = 100;
       downloads[id].speed = 0;
@@ -327,7 +348,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
       // Persist completed URL for inline button state (normalize to doc ID)
       const dlUrl = downloads[id].url;
       if (dlUrl) {
-        const key = extractDocKey(dlUrl);
+        const key = downloads[id].key || msg.key || extractDocKey(dlUrl);
         if (!completedUrls.includes(key)) {
           completedUrls.push(key);
           if (completedUrls.length > 500) completedUrls.shift();
@@ -375,16 +396,29 @@ chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== "popup") return;
   popupPort = port;
 
-  // Stale detection: 30s no update → error
+  // Stale detection: 30s no update or 5s without cancel ACK -> error
   const now = Date.now();
+  let staleStateChanged = false;
   for (const dl of Object.values(downloads)) {
     if (dl.status === "active" && now - dl.updatedAt > 30000) {
       dl.status = "error";
       dl.error = "Download stalled (no update for 30s)";
       dl.speed = 0;
+      dl.updatedAt = now;
+      staleStateChanged = true;
+    } else if (
+      dl.status === "cancelling" &&
+      now - dl.updatedAt > 5000
+    ) {
+      dl.status = "error";
+      dl.error = "Cancel was not confirmed by the page";
+      dl.speed = 0;
+      dl.updatedAt = now;
+      staleStateChanged = true;
     }
   }
   updateBadge();
+  if (staleStateChanged) saveStateNow();
 
   port.postMessage({ type: "state-snapshot", downloads: { ...downloads } });
 
@@ -426,7 +460,13 @@ chrome.runtime.onConnect.addListener((port) => {
     } else if (msg.action === "clear-completed") {
       for (const id of Object.keys(downloads)) {
         const status = downloads[id].status;
-        if (status === "active" || status === "paused") continue;
+        if (
+          status === "active" ||
+          status === "paused" ||
+          status === "cancelling"
+        ) {
+          continue;
+        }
         delete downloads[id];
       }
       completedUrls = [];

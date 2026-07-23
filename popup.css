@@ -136,8 +136,9 @@ body {
   background: #e8f2fd;
 }
 
-.dl-status.paused {
-  color: #e8a500;
+.dl-status.paused,
+.dl-status.cancelling {
+  color: #8a5d00;
   background: #fef7e0;
 }
 
@@ -170,7 +171,8 @@ body {
   background: #3390ec;
 }
 
-.dl-progress-bar.paused {
+.dl-progress-bar.paused,
+.dl-progress-bar.cancelling {
   background: #e8a500;
 }
 

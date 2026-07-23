@@ -4,7 +4,7 @@
   const BRIDGE_INSTANCE = crypto.randomUUID();
   globalThis.__TG_DL_BRIDGE_INSTANCE = BRIDGE_INSTANCE;
 
-  const PAGE_ORIGIN = "https://web.telegram.org";
+  const PAGE_ORIGIN = window.location.origin;
   const STATUS_TYPES = new Set([
     "dl-start",
     "dl-progress",
@@ -20,16 +20,11 @@
     return globalThis.__TG_DL_BRIDGE_INSTANCE === BRIDGE_INSTANCE;
   }
 
-  function reportBridgeError(msg, err) {
+  function reportBridgeError(err) {
     if (!isCurrentBridge()) return;
-    window.postMessage(
-      {
-        source: "tg-dl-bridge",
-        type: "bridge-error",
-        id: typeof msg.id === "string" ? msg.id : "",
-        error: err && err.message ? err.message : "Extension bridge unavailable",
-      },
-      PAGE_ORIGIN
+    console.warn(
+      "[TG DL] Extension bridge unavailable:",
+      err && err.message ? err.message : err
     );
   }
 
@@ -41,9 +36,9 @@
     if (!msg || msg.source !== "tg-dl" || !STATUS_TYPES.has(msg.type)) return;
 
     try {
-      chrome.runtime.sendMessage(msg).catch((err) => reportBridgeError(msg, err));
+      chrome.runtime.sendMessage(msg).catch(reportBridgeError);
     } catch (err) {
-      reportBridgeError(msg, err);
+      reportBridgeError(err);
     }
   });
 

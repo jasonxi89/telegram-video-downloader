@@ -64,25 +64,29 @@ if (!window.__TG_DL_LOADED) {
     if (action === "pause") {
       if (dl.paused) return;
       dl.paused = true;
-      postStatus("dl-pause", { id, url: dl.url });
+      postStatus("dl-pause", { id, url: dl.url, key: dl.key });
     } else if (action === "resume") {
       if (!dl.paused) return;
       dl.paused = false;
-      postStatus("dl-resume", { id, url: dl.url });
+      postStatus("dl-resume", { id, url: dl.url, key: dl.key });
       dl.fetchNext();
     } else if (action === "cancel") {
       dl.cancelled = true;
       if (dl.controller) dl.controller.abort();
       delete window.__TG_DL_ACTIVE[id];
-      postStatus("dl-cancel", { id, url: dl.url });
+      postStatus("dl-cancel", { id, url: dl.url, key: dl.key });
       invokeCallback(dl.onCancel);
     }
   });
 
   window.__TG_DL = function (url, opts = {}) {
     const { onProgress, onComplete, onError, onCancel } = opts;
+    const key = typeof opts.key === "string" ? opts.key : "";
     const id =
-      "dl_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+      "dl_" +
+      Date.now() +
+      "_" +
+      Math.random().toString(36).slice(2, 8).padEnd(6, "0");
     const filename = generateFilename(url);
     const blobs = [];
     let offset = 0;
@@ -93,6 +97,7 @@ if (!window.__TG_DL_LOADED) {
 
     const dlState = {
       url,
+      key,
       paused: false,
       cancelled: false,
       finished: false,
@@ -102,7 +107,7 @@ if (!window.__TG_DL_LOADED) {
       fetchNext: null,
     };
 
-    postStatus("dl-start", { id, filename, url, total: 0 });
+    postStatus("dl-start", { id, filename, url, key, total: 0 });
 
     function fetchNext() {
       if (
@@ -152,7 +157,15 @@ if (!window.__TG_DL_LOADED) {
             ? Math.min(100, Math.round((offset * 100) / total))
             : 0;
 
-          postStatus("dl-progress", { id, url, offset, total, pct, speed });
+          postStatus("dl-progress", {
+            id,
+            url,
+            key,
+            offset,
+            total,
+            pct,
+            speed,
+          });
           if (total) invokeCallback(onProgress, pct);
 
           return res.blob();
@@ -170,6 +183,7 @@ if (!window.__TG_DL_LOADED) {
               id,
               filename,
               url,
+              key,
               total: finalBlob.size,
             });
             invokeCallback(onComplete);
@@ -181,7 +195,7 @@ if (!window.__TG_DL_LOADED) {
           dlState.finished = true;
           delete window.__TG_DL_ACTIVE[id];
           console.error("[TG DL] Error:", err);
-          postStatus("dl-error", { id, url, error: err.message });
+          postStatus("dl-error", { id, url, key, error: err.message });
           invokeCallback(onError, err.message);
         })
         .finally(() => {
