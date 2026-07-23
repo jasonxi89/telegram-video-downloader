@@ -1,17 +1,18 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="utf-8">
+  <title>Telegram Video Downloader</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <div class="header">
+  <header class="header">
     <img src="icons/icon16.png" alt="" class="logo">
     <span class="title">TG Video Downloader</span>
-    <button id="clearBtn" class="clear-btn hidden">Clear</button>
-  </div>
-  <div id="list" class="list"></div>
-  <div id="empty" class="empty">No downloads yet</div>
+    <button id="clearBtn" type="button" class="clear-btn hidden">Clear</button>
+  </header>
+  <main id="list" class="list" aria-live="polite"></main>
+  <div id="empty" class="empty" role="status">No downloads yet</div>
   <script src="popup.js"></script>
 </body>
 </html>

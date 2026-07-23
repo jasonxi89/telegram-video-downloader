@@ -26,99 +26,133 @@ function sortOrder(status) {
   return 3;
 }
 
+const VALID_STATUSES = new Set(["active", "paused", "complete", "error"]);
+
+function safeStatus(status) {
+  return VALID_STATUSES.has(status) ? status : "error";
+}
+
+function safePercent(value) {
+  const pct = Number(value);
+  return Number.isFinite(pct) ? Math.min(100, Math.max(0, pct)) : 0;
+}
+
+function createActionButton(action, id, label, text, destructive = false) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "dl-btn";
+  if (destructive) button.classList.add("dl-btn-delete");
+  button.dataset.action = action;
+  button.dataset.id = id;
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  button.textContent = text;
+  return button;
+}
+
+function createDownloadItem(download) {
+  const dl = download && typeof download === "object" ? download : {};
+  const id = typeof dl.id === "string" ? dl.id : "";
+  const filename =
+    typeof dl.filename === "string" ? dl.filename : "unknown_video.mp4";
+  const status = safeStatus(dl.status);
+  const pct = safePercent(dl.pct);
+  const speedText = dl.speed ? " \u00b7 " + formatSpeed(dl.speed) : "";
+
+  const statusLabel =
+    status === "active"
+      ? Math.round(pct) + "%"
+      : status === "paused"
+        ? "Paused"
+        : status === "complete"
+          ? "Done"
+          : "Failed";
+  const detail =
+    status === "active"
+      ? formatSize(dl.offset) + " / " + formatSize(dl.total) + speedText
+      : status === "paused"
+        ? formatSize(dl.offset) + " / " + formatSize(dl.total)
+        : status === "complete"
+          ? formatSize(dl.total)
+          : typeof dl.error === "string"
+            ? dl.error
+            : "Download failed";
+
+  const item = document.createElement("div");
+  item.className = "dl-item";
+
+  const row = document.createElement("div");
+  row.className = "dl-row";
+
+  const filenameEl = document.createElement("span");
+  filenameEl.className = "dl-filename";
+  filenameEl.title = filename;
+  filenameEl.textContent = filename;
+  row.appendChild(filenameEl);
+
+  const actions = document.createElement("div");
+  actions.className = "dl-actions";
+
+  const statusEl = document.createElement("span");
+  statusEl.classList.add("dl-status", status);
+  statusEl.textContent = statusLabel;
+  actions.appendChild(statusEl);
+
+  if (status === "active") {
+    actions.appendChild(createActionButton("pause", id, "Pause", "\u23f8"));
+  } else if (status === "paused") {
+    actions.appendChild(createActionButton("resume", id, "Resume", "\u25b6"));
+  }
+  const removeAction =
+    status === "active" || status === "paused" ? "cancel" : "delete";
+  actions.appendChild(
+    createActionButton(removeAction, id, "Remove", "\u00d7", true)
+  );
+  row.appendChild(actions);
+  item.appendChild(row);
+
+  const progress = document.createElement("div");
+  progress.className = "dl-progress";
+  progress.setAttribute("role", "progressbar");
+  progress.setAttribute("aria-label", "Download progress");
+  progress.setAttribute("aria-valuemin", "0");
+  progress.setAttribute("aria-valuemax", "100");
+  progress.setAttribute("aria-valuenow", String(Math.round(pct)));
+
+  const progressBar = document.createElement("div");
+  progressBar.classList.add("dl-progress-bar", status);
+  progressBar.style.width = pct + "%";
+  progress.appendChild(progressBar);
+  item.appendChild(progress);
+
+  const detailEl = document.createElement("div");
+  detailEl.className = "dl-detail";
+  detailEl.textContent = detail;
+  item.appendChild(detailEl);
+  return item;
+}
+
 function render() {
   const items = Object.values(downloads).sort(
     (a, b) =>
-      sortOrder(a.status) - sortOrder(b.status) || b.id.localeCompare(a.id)
+      sortOrder(a.status) - sortOrder(b.status) ||
+      String(b.id).localeCompare(String(a.id))
   );
-
-  // Show clear button when there are finished items
   const hasFinished = items.some(
-    (d) => d.status === "complete" || d.status === "error"
+    (dl) => dl.status === "complete" || dl.status === "error"
   );
   clearBtn.classList.toggle("hidden", !hasFinished);
+  listEl.replaceChildren();
 
   if (items.length === 0) {
-    listEl.innerHTML = "";
     emptyEl.classList.remove("hidden");
     return;
   }
 
   emptyEl.classList.add("hidden");
-  listEl.innerHTML = items
-    .map((dl) => {
-      const statusLabel =
-        dl.status === "active"
-          ? dl.pct + "%"
-          : dl.status === "paused"
-            ? "Paused"
-            : dl.status === "complete"
-              ? "Done"
-              : "Failed";
-
-      const speedText = dl.speed ? " \u00b7 " + formatSpeed(dl.speed) : "";
-      const detail =
-        dl.status === "active"
-          ? formatSize(dl.offset) + " / " + formatSize(dl.total) + speedText
-          : dl.status === "paused"
-            ? formatSize(dl.offset) + " / " + formatSize(dl.total)
-            : dl.status === "complete"
-              ? formatSize(dl.total)
-              : dl.error || "Download failed";
-
-      // Action buttons per status
-      let buttons = "";
-      if (dl.status === "active") {
-        buttons =
-          '<button class="dl-btn" data-action="pause" data-id="' +
-          dl.id +
-          '" title="Pause">\u23f8</button>';
-      } else if (dl.status === "paused") {
-        buttons =
-          '<button class="dl-btn" data-action="resume" data-id="' +
-          dl.id +
-          '" title="Resume">\u25b6</button>';
-      }
-      buttons +=
-        '<button class="dl-btn dl-btn-delete" data-action="' +
-        (dl.status === "active" || dl.status === "paused"
-          ? "cancel"
-          : "delete") +
-        '" data-id="' +
-        dl.id +
-        '" title="Remove">\u00d7</button>';
-
-      return (
-        '<div class="dl-item">' +
-        '<div class="dl-row">' +
-        '<span class="dl-filename" title="' +
-        dl.filename +
-        '">' +
-        dl.filename +
-        "</span>" +
-        '<div class="dl-actions">' +
-        '<span class="dl-status ' +
-        dl.status +
-        '">' +
-        statusLabel +
-        "</span>" +
-        buttons +
-        "</div>" +
-        "</div>" +
-        '<div class="dl-progress">' +
-        '<div class="dl-progress-bar ' +
-        dl.status +
-        '" style="width:' +
-        (dl.pct || 0) +
-        '%"></div>' +
-        "</div>" +
-        '<div class="dl-detail">' +
-        detail +
-        "</div>" +
-        "</div>"
-      );
-    })
-    .join("");
+  const fragment = document.createDocumentFragment();
+  for (const item of items) fragment.appendChild(createDownloadItem(item));
+  listEl.appendChild(fragment);
 }
 
 // Event delegation for action buttons
