@@ -15,6 +15,24 @@ if (!window.__TG_DL_A_LOADED) {
     return match ? "doc:" + match[1] : src;
   }
 
+  function getViewerVideo(viewer) {
+    if (!viewer) return null;
+    return (
+      viewer.querySelector(".MediaViewerSlide--active video") ||
+      viewer.querySelector("video")
+    );
+  }
+
+  function getLiveButtonVideo(btn) {
+    if (btn.dataset.viewer === "a") {
+      const viewer =
+        document.querySelector("#MediaViewer") ||
+        document.querySelector("[class*='MediaViewer']");
+      return getViewerVideo(viewer);
+    }
+    return btn._video;
+  }
+
   function buttonPadding(btn) {
     if (btn.dataset.variant === "album") return "3px 10px";
     if (btn.dataset.variant === "viewer") return "8px 14px";
@@ -43,7 +61,7 @@ if (!window.__TG_DL_A_LOADED) {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      startDownload(btn._video, btn);
+      startDownload(getLiveButtonVideo(btn), btn);
     });
     return btn;
   }
@@ -142,6 +160,7 @@ if (!window.__TG_DL_A_LOADED) {
         throw new Error("Core downloader is unavailable");
       }
       window.__TG_DL(src, {
+        key,
         onProgress: (pct) => {
           DOWNLOAD_PROGRESS.set(key, pct);
           syncButtonsForKey(key);
@@ -234,7 +253,7 @@ if (!window.__TG_DL_A_LOADED) {
       return;
     }
 
-    const video = viewer.querySelector("video");
+    const video = getViewerVideo(viewer);
     if (!video || !(video.src || video.currentSrc)) return;
 
     const actions = viewer.querySelector(
@@ -297,7 +316,10 @@ if (!window.__TG_DL_A_LOADED) {
 
     if (event.data.source !== "tg-dl" || !event.data.url) return;
 
-    const key = getVideoKey(event.data.url);
+    const key =
+      typeof event.data.key === "string" && event.data.key
+        ? event.data.key
+        : getVideoKey(event.data.url);
     if (event.data.type === "dl-progress") {
       ACTIVE_DOWNLOADS.add(key);
       DOWNLOAD_PROGRESS.set(key, event.data.pct || 0);

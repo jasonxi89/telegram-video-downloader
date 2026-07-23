@@ -21,12 +21,18 @@ function formatSpeed(bytesPerSec) {
 
 function sortOrder(status) {
   if (status === "active") return 0;
-  if (status === "paused") return 1;
+  if (status === "paused" || status === "cancelling") return 1;
   if (status === "error") return 2;
   return 3;
 }
 
-const VALID_STATUSES = new Set(["active", "paused", "complete", "error"]);
+const VALID_STATUSES = new Set([
+  "active",
+  "paused",
+  "cancelling",
+  "complete",
+  "error",
+]);
 
 function safeStatus(status) {
   return VALID_STATUSES.has(status) ? status : "error";
@@ -64,13 +70,15 @@ function createDownloadItem(download) {
       ? Math.round(pct) + "%"
       : status === "paused"
         ? "Paused"
-        : status === "complete"
+        : status === "cancelling"
+          ? "Cancelling"
+          : status === "complete"
           ? "Done"
           : "Failed";
   const detail =
     status === "active"
       ? formatSize(dl.offset) + " / " + formatSize(dl.total) + speedText
-      : status === "paused"
+      : status === "paused" || status === "cancelling"
         ? formatSize(dl.offset) + " / " + formatSize(dl.total)
         : status === "complete"
           ? formatSize(dl.total)
@@ -103,11 +111,13 @@ function createDownloadItem(download) {
   } else if (status === "paused") {
     actions.appendChild(createActionButton("resume", id, "Resume", "\u25b6"));
   }
-  const removeAction =
-    status === "active" || status === "paused" ? "cancel" : "delete";
-  actions.appendChild(
-    createActionButton(removeAction, id, "Remove", "\u00d7", true)
-  );
+  if (status !== "cancelling") {
+    const removeAction =
+      status === "active" || status === "paused" ? "cancel" : "delete";
+    actions.appendChild(
+      createActionButton(removeAction, id, "Remove", "\u00d7", true)
+    );
+  }
   row.appendChild(actions);
   item.appendChild(row);
 
@@ -173,7 +183,11 @@ listEl.addEventListener("click", (e) => {
 clearBtn.addEventListener("click", () => {
   for (const id of Object.keys(downloads)) {
     const status = downloads[id].status;
-    if (status !== "active" && status !== "paused") {
+    if (
+      status !== "active" &&
+      status !== "paused" &&
+      status !== "cancelling"
+    ) {
       delete downloads[id];
     }
   }

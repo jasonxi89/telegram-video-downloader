@@ -9,12 +9,51 @@ if (!window.__TG_DL_K_LOADED) {
   const COMPLETED_URLS = new Set();
   const ACTIVE_DOWNLOADS = new Set();
   const DOWNLOAD_PROGRESS = new Map();
+  const SOURCE_KEYS = new Map();
 
-  function getVideoKey(src) {
-    // Web A: /progressive/document{ID}
+  function getMessageKey(video) {
+    if (!video || typeof video.closest !== "function") return "";
+    const bubble = video.closest(".bubble");
+    if (!bubble) return "";
+    const albumItem = video.closest(".album-item[data-mid]");
+    const owner = albumItem || bubble;
+    const peerId = owner.dataset.peerId || bubble.dataset.peerId;
+    const mid = owner.dataset.mid;
+    return peerId && mid ? "msg:" + peerId + ":" + mid : "";
+  }
+
+  function rememberSourceKey(src, key) {
+    if (!src || !key) return;
+    SOURCE_KEYS.set(src, key);
+    if (SOURCE_KEYS.size > 500) {
+      SOURCE_KEYS.delete(SOURCE_KEYS.keys().next().value);
+    }
+  }
+
+  function findMessageKeyBySource(src, video) {
+    const ownKey = getMessageKey(video);
+    if (ownKey) return ownKey;
+    if (SOURCE_KEYS.has(src)) return SOURCE_KEYS.get(src);
+
+    for (const candidate of document.querySelectorAll("video")) {
+      if (candidate === video) continue;
+      const candidateSrc = candidate.src || candidate.currentSrc;
+      if (candidateSrc !== src) continue;
+      const key = getMessageKey(candidate);
+      if (key) return key;
+    }
+    return "";
+  }
+
+  function getVideoKey(src, video) {
+    const messageKey = findMessageKeyBySource(src, video);
+    if (messageKey) {
+      rememberSourceKey(src, messageKey);
+      return messageKey;
+    }
+
     const docMatch = src.match(/document(\d+)/);
     if (docMatch) return "doc:" + docMatch[1];
-    // Web K: stream/{URL-encoded JSON} with location.id
     if (src.includes("stream/")) {
       try {
         const json = JSON.parse(decodeURIComponent(src.split("stream/")[1]));
@@ -22,6 +61,21 @@ if (!window.__TG_DL_K_LOADED) {
       } catch {}
     }
     return src;
+  }
+
+  function getViewerVideo(viewer) {
+    if (!viewer) return null;
+    return (
+      viewer.querySelector(".media-viewer-mover.active video") ||
+      viewer.querySelector(".media-viewer-aspecter video")
+    );
+  }
+
+  function getLiveButtonVideo(btn) {
+    if (btn.dataset.viewer === "k") {
+      return getViewerVideo(document.querySelector(".media-viewer-whole"));
+    }
+    return btn._video;
   }
 
   function buttonPadding(btn) {
@@ -52,7 +106,7 @@ if (!window.__TG_DL_K_LOADED) {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      startDownload(btn._video, btn);
+      startDownload(getLiveButtonVideo(btn), btn);
     });
     return btn;
   }
@@ -112,7 +166,7 @@ if (!window.__TG_DL_K_LOADED) {
   function syncButton(btn, video) {
     const src = video && (video.src || video.currentSrc);
     if (!src) return;
-    const key = getVideoKey(src);
+    const key = getVideoKey(src, video);
     btn.dataset.videoKey = key;
 
     if (ACTIVE_DOWNLOADS.has(key)) {
@@ -136,7 +190,7 @@ if (!window.__TG_DL_K_LOADED) {
     const src = video && (video.src || video.currentSrc);
     if (!src) return;
 
-    const key = getVideoKey(src);
+    const key = getVideoKey(src, video);
     if (ACTIVE_DOWNLOADS.has(key)) {
       syncButton(btn, video);
       return;
@@ -151,6 +205,7 @@ if (!window.__TG_DL_K_LOADED) {
         throw new Error("Core downloader is unavailable");
       }
       window.__TG_DL(src, {
+        key,
         onProgress: (pct) => {
           DOWNLOAD_PROGRESS.set(key, pct);
           syncButtonsForKey(key);
@@ -221,7 +276,7 @@ if (!window.__TG_DL_K_LOADED) {
         }
       }
 
-      const scanKey = getVideoKey(src);
+      const scanKey = getVideoKey(src, video);
       if (btn.dataset.videoKey !== scanKey || btn._video !== video) {
         btn._video = video;
         syncButton(btn, video);
@@ -253,9 +308,7 @@ if (!window.__TG_DL_K_LOADED) {
       }
     }
 
-    const video = viewer.querySelector(
-      ".media-viewer-mover.active video, .media-viewer-aspecter video"
-    );
+    const video = getViewerVideo(viewer);
     if (!video || !(video.src || video.currentSrc)) return;
 
     let btn = viewer.querySelector("." + DL_CLASS);
@@ -287,7 +340,7 @@ if (!window.__TG_DL_K_LOADED) {
       document.body.appendChild(btn);
     }
 
-    const viewerKey = getVideoKey(video.src || video.currentSrc);
+    const viewerKey = getVideoKey(video.src || video.currentSrc, video);
     if (btn.dataset.videoKey !== viewerKey || btn._video !== video) {
       btn._video = video;
       syncButton(btn, video);
@@ -315,7 +368,10 @@ if (!window.__TG_DL_K_LOADED) {
 
     if (event.data.source !== "tg-dl" || !event.data.url) return;
 
-    const key = getVideoKey(event.data.url);
+    const key =
+      typeof event.data.key === "string" && event.data.key
+        ? event.data.key
+        : getVideoKey(event.data.url);
     if (event.data.type === "dl-progress") {
       ACTIVE_DOWNLOADS.add(key);
       DOWNLOAD_PROGRESS.set(key, event.data.pct || 0);
