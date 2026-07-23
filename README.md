@@ -8,7 +8,13 @@ Chrome 扩展，用于从 Telegram 网页版下载视频 — 同时支持 [Web K
 
 - **Inline download button** — automatically appears below videos in chat once they're loaded
 - **Media viewer download** — download button when viewing videos fullscreen
-- **Progress display** — shows download percentage (⏳ 0% → 100% → ✅ Done)
+- **Progress display** — shows download percentage (⏳ 0% → 100% → ✅ Done), synced across all buttons for the same video
+- **Popup download manager** — click the extension icon for a download queue panel with progress bar, speed, and filename
+- **Download controls** — pause / resume / cancel / remove; completed items are kept with a re-download button
+- **Badge** — extension icon shows the number of active downloads
+- **Album support** — download each video in a multi-video album
+- **Duplicate prevention** — the same video won't be downloaded twice concurrently
+- **i18n** — 12 languages (ar, de, en, es, fr, hi, ja, ko, pt_BR, ru, zh_CN, zh_TW)
 - Works with both Web K (blob: URLs) and Web A (progressive streaming URLs)
 - Manifest V3, no external dependencies
 
@@ -16,7 +22,13 @@ Chrome 扩展，用于从 Telegram 网页版下载视频 — 同时支持 [Web K
 
 - **聊天内下载按钮** — 视频加载完成后，自动在视频下方显示下载按钮
 - **全屏查看器下载** — 点开视频全屏查看时出现下载按钮
-- **下载进度显示** — 实时百分比（⏳ 0% → 100% → ✅ Done）
+- **下载进度显示** — 实时百分比（⏳ 0% → 100% → ✅ Done），同一视频的多个按钮进度同步
+- **Popup 下载管理面板** — 点击扩展图标弹出下载队列，显示进度条、速度、文件名
+- **下载控制** — 暂停 / 恢复 / 取消 / 删除；已完成条目保留并提供重新下载按钮
+- **Badge 角标** — 扩展图标显示当前活跃下载数量
+- **相册支持** — 多视频相册中的每个视频均可单独下载
+- **防重复下载** — 同一视频不会被并发下载两次
+- **多语言** — 12 种语言（ar、de、en、es、fr、hi、ja、ko、pt_BR、ru、zh_CN、zh_TW）
 - 同时支持 Web K（blob: URL）和 Web A（progressive 流式 URL）
 - Manifest V3，无外部依赖
 
@@ -31,12 +43,22 @@ Chrome 扩展，用于从 Telegram 网页版下载视频 — 同时支持 [Web K
 ## Architecture / 架构
 
 ```
-background.js
-  └─ chrome.scripting.executeScript({ world: "MAIN" })
-      ├─ downloader.js   — Download engine with chunked Range requests
-      ├─ inject_a.js     — Web A UI injection (buttons)
-      └─ inject_k.js     — Web K UI injection (buttons)
+MAIN world (injected via chrome.scripting.executeScript({ world: "MAIN" }))
+  ├─ downloader.js   — Download engine (sequential Range requests), reports status via postMessage
+  ├─ inject_k.js     — Web K UI injection: poll for videos (600ms), add buttons
+  └─ inject_a.js     — Web A UI injection: poll for videos (600ms), add buttons
+       │ window.postMessage
+       ▼
+content.js (ISOLATED world)  — Message bridge: window → chrome.runtime
+       │ chrome.runtime.sendMessage
+       ▼
+background.js (Service Worker) — Injects MAIN world scripts, manages download
+       │ port.postMessage        state, badge, and popup ports
+       ▼
+popup.html / popup.js / popup.css — Download queue panel UI
 ```
+
+下载引擎和按钮注入运行在页面 MAIN world；`content.js`（ISOLATED world）作为消息桥把 `window.postMessage` 转发给 `background.js`（Service Worker，负责脚本注入、下载状态、badge、popup 端口）；popup 面板通过 port 与 background 通信。
 
 **Why MAIN world?** Telegram's Service Worker intercepts `/progressive/` URLs and streams video data via MTProto protocol. Scripts in Chrome's default ISOLATED world cannot properly receive this data — they get garbage responses. Injecting into the page's MAIN world ensures `fetch()` goes through the Service Worker correctly.
 
@@ -147,12 +169,17 @@ This is the same proven approach used by [Neet-Nestor/Telegram-Media-Downloader]
 ## Project Structure / 项目结构
 
 ```
-├── manifest.json      # Manifest V3 config (scripting + host_permissions)
-├── background.js      # Injects MAIN world scripts on page load
-├── downloader.js      # Core download engine (sequential Range requests)
-├── inject_a.js        # Web A: poll for videos, inject download buttons
+├── manifest.json      # Manifest V3 config (permissions: scripting + storage; action popup; content script)
+├── background.js      # Injects MAIN world scripts, download state management, badge, popup ports
+├── downloader.js      # Core download engine (sequential Range requests), postMessage status reports
+├── content.js         # Message bridge: MAIN world → Service Worker (runs in ISOLATED world)
 ├── inject_k.js        # Web K: poll for videos, inject download buttons
-└── icons/             # Extension icons
+├── inject_a.js        # Web A: poll for videos, inject download buttons
+├── popup.html         # Download queue panel skeleton
+├── popup.css          # Panel styles (340px)
+├── popup.js           # Download list rendering + port communication with background
+├── _locales/          # i18n messages (12 languages)
+└── icons/             # Extension icons (16/48/128)
 ```
 
 ## License / 许可

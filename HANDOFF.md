@@ -1,5 +1,5 @@
 # HANDOFF — telegram-video-downloader
-> 跨 agent/IDE 接手文档 | 最后更新: 2026-07-17 | 改动项目后请同步更新此文档
+> 跨 agent/IDE 接手文档 | 最后更新: 2026-07-23 | 改动项目后请同步更新此文档
 
 ## 项目定位
 Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支持 Web K（`blob:` URL）和 Web A（`progressive/` 流式 URL）。纯前端扩展，**不是 NAS 服务，无后端、无部署流程、无构建步骤**。
@@ -40,7 +40,7 @@ icons/           16/48/128 png
 - **轮询扫描（600ms）优于 MutationObserver**：Telegram 虚拟滚动频繁销毁/重建 DOM
 - Web K 与 Web A 的 URL 方案和 DOM 结构完全不同，两套注入脚本各自维护
 - `chrome.contextMenus` 在 Telegram 无效（被其自定义右键菜单替换）
-- ⚠️ README.md 的「Architecture / Project Structure」章节偏旧，未包含 popup、content.js 消息桥、storage 权限、i18n —— 以本文档和实际代码为准
+- README.md 已于 2026-07-23 更新至与代码一致（Features/Architecture/Project Structure 含 popup、content.js 消息桥、i18n）
 
 ## 进行中 / TODO
 - 无明确 open TODO；状态为「开发中」但主线功能完整可用
