@@ -1,38 +1,73 @@
 // ── Service Worker: tab injection + download state management ──
 
+const TELEGRAM_ORIGIN = "https://web.telegram.org";
+let resolveStateReady;
+const stateReady = new Promise((resolve) => {
+  resolveStateReady = resolve;
+});
+
+function telegramVariant(url) {
+  if (!url || !url.startsWith(TELEGRAM_ORIGIN + "/")) return null;
+  const path = new URL(url).pathname;
+  if (path.startsWith("/a")) return "a";
+  if (path.startsWith("/k")) return "k";
+  return null;
+}
+
+async function injectTab(tabId, url) {
+  const variant = telegramVariant(url);
+  if (!variant) return;
+
+  try {
+    // Reinstall the isolated-world bridge after an extension reload.
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"],
+      world: "ISOLATED",
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["downloader.js", variant === "a" ? "inject_a.js" : "inject_k.js"],
+      world: "MAIN",
+    });
+    await stateReady;
+    if (completedUrls.length > 0) {
+      await chrome.tabs.sendMessage(tabId, {
+        source: "tg-dl-init",
+        completedUrls,
+      });
+    }
+  } catch (err) {
+    console.warn("[TG DL] Failed to inject tab", tabId, err);
+  }
+}
+
 // ── Tab injection ──
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status !== "complete" || !tab.url) return;
-  if (!tab.url.startsWith("https://web.telegram.org/")) return;
+  if (changeInfo.status === "complete") injectTab(tabId, tab.url);
+});
 
-  const path = new URL(tab.url).pathname;
-  const isWebA = path.startsWith("/a");
-  const isWebK = path.startsWith("/k");
-  if (!isWebA && !isWebK) return;
+async function injectOpenTelegramTabs() {
+  const tabs = await chrome.tabs.query({ url: TELEGRAM_ORIGIN + "/*" });
+  await Promise.allSettled(tabs.map((tab) => injectTab(tab.id, tab.url)));
+}
 
-  const files = ["downloader.js"];
-  if (isWebA) files.push("inject_a.js");
-  if (isWebK) files.push("inject_k.js");
-
-  chrome.scripting
-    .executeScript({ target: { tabId }, files, world: "MAIN" })
-    .then(() => {
-      if (completedUrls.length > 0) {
-        chrome.tabs
-          .sendMessage(tabId, {
-            source: "tg-dl-init",
-            completedUrls,
-          })
-          .catch(() => {});
-      }
-    })
-    .catch(() => {});
+chrome.runtime.onInstalled.addListener(() => {
+  injectOpenTelegramTabs().catch((err) => {
+    console.warn("[TG DL] Failed to restore open tabs", err);
+  });
+});
+chrome.runtime.onStartup.addListener(() => {
+  injectOpenTelegramTabs().catch((err) => {
+    console.warn("[TG DL] Failed to restore open tabs", err);
+  });
 });
 
 // ── Download state ──
 let downloads = {};
 let completedUrls = [];
 let popupPort = null;
+const pendingCancelTimers = new Map();
 
 function extractDocKey(url) {
   if (!url) return url;
@@ -45,6 +80,79 @@ function extractDocKey(url) {
     } catch {}
   }
   return url;
+}
+
+const STATUS_TYPES = new Set([
+  "dl-start",
+  "dl-progress",
+  "dl-complete",
+  "dl-error",
+  "dl-pause",
+  "dl-resume",
+  "dl-cancel",
+]);
+const DOWNLOAD_ID_PATTERN = /^dl_\d+_[a-z0-9]{6}$/;
+
+function isDownloadUrl(value) {
+  if (typeof value !== "string" || value.length > 8192) return false;
+  try {
+    const url = new URL(value);
+    return url.origin === TELEGRAM_ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
+function finiteNumber(value, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+function normalizeStatusMessage(rawMsg, sender) {
+  const senderUrl = sender.url || (sender.tab && sender.tab.url);
+  if (!sender.tab || !telegramVariant(senderUrl)) return null;
+  if (!rawMsg || rawMsg.source !== "tg-dl" || !STATUS_TYPES.has(rawMsg.type)) {
+    return null;
+  }
+  if (typeof rawMsg.id !== "string" || !DOWNLOAD_ID_PATTERN.test(rawMsg.id)) {
+    return null;
+  }
+
+  const msg = { source: "tg-dl", type: rawMsg.type, id: rawMsg.id };
+  if (typeof rawMsg.url === "string" && isDownloadUrl(rawMsg.url)) {
+    msg.url = rawMsg.url;
+  }
+  if (
+    (rawMsg.type === "dl-start" ||
+      rawMsg.type === "dl-progress" ||
+      rawMsg.type === "dl-complete") &&
+    !msg.url
+  ) {
+    return null;
+  }
+
+  if (rawMsg.type === "dl-start" || rawMsg.type === "dl-complete") {
+    msg.filename =
+      typeof rawMsg.filename === "string"
+        ? rawMsg.filename.slice(0, 512)
+        : "unknown_video.mp4";
+  }
+  if (rawMsg.type === "dl-progress") {
+    msg.offset = finiteNumber(rawMsg.offset);
+    msg.total = finiteNumber(rawMsg.total);
+    msg.pct = Math.min(100, finiteNumber(rawMsg.pct));
+    msg.speed = finiteNumber(rawMsg.speed);
+  }
+  if (rawMsg.type === "dl-complete") {
+    msg.total = finiteNumber(rawMsg.total);
+  }
+  if (rawMsg.type === "dl-error") {
+    msg.error =
+      typeof rawMsg.error === "string"
+        ? rawMsg.error.slice(0, 1000)
+        : "Download failed";
+  }
+  return msg;
 }
 
 // Persist state to local storage — throttled to max once per 2s
@@ -63,28 +171,38 @@ function saveStateNow() {
 
 // Restore on startup — merge with any entries added during async gap
 chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
-  if (data.completedUrls) {
-    for (const u of data.completedUrls) {
-      if (!completedUrls.includes(u)) completedUrls.push(u);
-    }
-  }
-  if (data.downloads) {
-    const now = Date.now();
-    for (const dl of Object.values(data.downloads)) {
-      if (
-        (dl.status === "active" || dl.status === "paused") &&
-        now - dl.updatedAt > 60000
-      ) {
-        dl.status = "error";
-        dl.error = "Download interrupted";
-        dl.speed = 0;
+  try {
+    if (Array.isArray(data.completedUrls)) {
+      for (const url of data.completedUrls) {
+        if (typeof url === "string" && !completedUrls.includes(url)) {
+          completedUrls.push(url);
+        }
       }
     }
-    // Merge: stored entries first, then any new ones added during async restore
-    downloads = { ...data.downloads, ...downloads };
+    if (data.downloads && typeof data.downloads === "object") {
+      const now = Date.now();
+      for (const dl of Object.values(data.downloads)) {
+        if (
+          dl &&
+          (dl.status === "active" || dl.status === "paused") &&
+          now - dl.updatedAt > 60000
+        ) {
+          dl.status = "error";
+          dl.error = "Download interrupted";
+          dl.speed = 0;
+        }
+      }
+      // Merge: stored entries first, then any new ones added during async restore
+      downloads = { ...data.downloads, ...downloads };
+    }
+    updateBadge();
+    saveStateNow();
+    sendToPopup({ type: "state-snapshot", downloads: { ...downloads } });
+  } catch (err) {
+    console.error("[TG DL] Failed to restore state", err);
+  } finally {
+    resolveStateReady();
   }
-  updateBadge();
-  saveStateNow();
 });
 
 function updateBadge() {
@@ -113,12 +231,50 @@ function sendCommand(tabId, action, id) {
   return chrome.tabs.sendMessage(tabId, { source: "tg-dl-cmd", action, id });
 }
 
+function clearPendingCancel(id) {
+  const timer = pendingCancelTimers.get(id);
+  if (timer) clearTimeout(timer);
+  pendingCancelTimers.delete(id);
+}
+
+function markCancelFailed(id, error) {
+  clearPendingCancel(id);
+  const dl = downloads[id];
+  if (!dl) return;
+  dl.status = "error";
+  dl.error = error || "Unable to cancel download";
+  dl.speed = 0;
+  dl.updatedAt = Date.now();
+  updateBadge();
+  saveStateNow();
+  sendToPopup({ type: "dl-update", download: dl });
+}
+
+function requestCancel(dl) {
+  if (pendingCancelTimers.has(dl.id)) return;
+  const timer = setTimeout(() => {
+    markCancelFailed(dl.id, "Cancel was not confirmed by the page");
+  }, 2000);
+  pendingCancelTimers.set(dl.id, timer);
+  sendCommand(dl.tabId, "cancel", dl.id).catch((err) => {
+    markCancelFailed(
+      dl.id,
+      err && err.message ? err.message : "Unable to cancel download"
+    );
+  });
+}
+
 // Status updates from content script
-chrome.runtime.onMessage.addListener((msg, sender) => {
-  if (msg.source !== "tg-dl") return;
+chrome.runtime.onMessage.addListener((rawMsg, sender) => {
+  const msg = normalizeStatusMessage(rawMsg, sender);
+  if (!msg) return;
 
   const { type, id } = msg;
-  const tabId = sender.tab ? sender.tab.id : null;
+  const tabId = sender.tab.id;
+  if (downloads[id] && downloads[id].tabId !== tabId) return;
+  if (type === "dl-complete" || type === "dl-error" || type === "dl-cancel") {
+    clearPendingCancel(id);
+  }
 
   if (type === "dl-start") {
     downloads[id] = {
@@ -138,6 +294,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       downloads[id] = {
         id,
         filename: "unknown_video.mp4",
+        url: msg.url,
         status: "active",
         offset: 0,
         total: 0,
@@ -196,6 +353,7 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
       downloads[id].updatedAt = Date.now();
     }
   } else if (type === "dl-cancel") {
+    clearPendingCancel(id);
     delete downloads[id];
   }
 
@@ -232,26 +390,35 @@ chrome.runtime.onConnect.addListener((port) => {
 
   // Commands from popup — wait for confirmation, don't optimistically update
   port.onMessage.addListener((msg) => {
+    if (!msg || typeof msg.action !== "string") return;
+    if (msg.id !== undefined && typeof msg.id !== "string") return;
     const dl = downloads[msg.id];
 
-    if (msg.action === "pause" && dl) {
+    if (msg.action === "pause" && dl && dl.status === "active") {
       sendCommand(dl.tabId, "pause", msg.id).catch(() => {
         // Command failed to reach downloader — notify popup
         sendToPopup({ type: "dl-update", download: dl });
       });
       // Don't update status here — wait for dl-pause confirmation from downloader
-    } else if (msg.action === "resume" && dl) {
+    } else if (msg.action === "resume" && dl && dl.status === "paused") {
       sendCommand(dl.tabId, "resume", msg.id).catch(() => {
         sendToPopup({ type: "dl-update", download: dl });
       });
       // Don't update status here — wait for dl-resume confirmation from downloader
-    } else if (msg.action === "cancel") {
-      if (dl) sendCommand(dl.tabId, "cancel", msg.id).catch(() => {});
-      delete downloads[msg.id];
-      updateBadge();
-      saveStateNow();
-      sendToPopup({ type: "dl-delete", id: msg.id });
-    } else if (msg.action === "delete") {
+    } else if (
+      msg.action === "cancel" &&
+      dl &&
+      (dl.status === "active" || dl.status === "paused")
+    ) {
+      // Keep the entry until downloader.js confirms dl-cancel. If delivery or
+      // acknowledgement fails, retain a visible error instead of hiding it.
+      requestCancel(dl);
+    } else if (
+      msg.action === "delete" &&
+      dl &&
+      dl.status !== "active" &&
+      dl.status !== "paused"
+    ) {
       delete downloads[msg.id];
       updateBadge();
       saveStateNow();
@@ -270,6 +437,6 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 
   port.onDisconnect.addListener(() => {
-    popupPort = null;
+    if (popupPort === port) popupPort = null;
   });
 });
