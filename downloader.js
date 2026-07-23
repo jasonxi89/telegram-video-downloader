@@ -5,6 +5,7 @@ if (!window.__TG_DL_LOADED) {
   window.__TG_DL_LOADED = true;
 
   const RANGE_REGEX = /^bytes (\d+)-(\d+)\/(\d+)$/;
+  const PAGE_ORIGIN = window.location.origin;
   window.__TG_DL_ACTIVE = {};
 
   function generateFilename(url) {
@@ -40,35 +41,46 @@ if (!window.__TG_DL_LOADED) {
   }
 
   function postStatus(type, detail) {
-    window.postMessage({ source: "tg-dl", type, ...detail }, "*");
+    window.postMessage({ source: "tg-dl", type, ...detail }, PAGE_ORIGIN);
+  }
+
+  function invokeCallback(callback, ...args) {
+    if (typeof callback !== "function") return;
+    try {
+      callback(...args);
+    } catch (err) {
+      console.error("[TG DL] UI callback error:", err);
+    }
   }
 
   // Control commands from popup via content script
   window.addEventListener("message", (event) => {
-    if (event.source !== window) return;
+    if (event.source !== window || event.origin !== PAGE_ORIGIN) return;
     if (!event.data || event.data.source !== "tg-dl-cmd") return;
     const { action, id } = event.data;
     const dl = window.__TG_DL_ACTIVE[id];
-    if (!dl) return;
+    if (!dl || dl.finished || dl.cancelled) return;
 
     if (action === "pause") {
+      if (dl.paused) return;
       dl.paused = true;
-      postStatus("dl-pause", { id });
+      postStatus("dl-pause", { id, url: dl.url });
     } else if (action === "resume") {
+      if (!dl.paused) return;
       dl.paused = false;
-      postStatus("dl-resume", { id });
+      postStatus("dl-resume", { id, url: dl.url });
       dl.fetchNext();
     } else if (action === "cancel") {
       dl.cancelled = true;
       if (dl.controller) dl.controller.abort();
-      if (dl.onError) dl.onError("Cancelled");
       delete window.__TG_DL_ACTIVE[id];
-      postStatus("dl-cancel", { id });
+      postStatus("dl-cancel", { id, url: dl.url });
+      invokeCallback(dl.onCancel);
     }
   });
 
   window.__TG_DL = function (url, opts = {}) {
-    const { onProgress, onComplete, onError } = opts;
+    const { onProgress, onComplete, onError, onCancel } = opts;
     const id =
       "dl_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
     const filename = generateFilename(url);
@@ -79,19 +91,32 @@ if (!window.__TG_DL_LOADED) {
     let lastTime = Date.now();
     let speed = 0;
 
-    const controller = new AbortController();
     const dlState = {
+      url,
       paused: false,
       cancelled: false,
-      controller,
-      onError,
+      finished: false,
+      inFlight: false,
+      controller: null,
+      onCancel,
       fetchNext: null,
     };
 
     postStatus("dl-start", { id, filename, url, total: 0 });
 
     function fetchNext() {
-      if (dlState.paused || dlState.cancelled) return;
+      if (
+        dlState.paused ||
+        dlState.cancelled ||
+        dlState.finished ||
+        dlState.inFlight
+      ) {
+        return;
+      }
+
+      dlState.inFlight = true;
+      const controller = new AbortController();
+      dlState.controller = controller;
 
       fetch(url, {
         method: "GET",
@@ -127,37 +152,57 @@ if (!window.__TG_DL_LOADED) {
             ? Math.min(100, Math.round((offset * 100) / total))
             : 0;
 
-          if (onProgress && total) onProgress(pct);
           postStatus("dl-progress", { id, url, offset, total, pct, speed });
+          if (total) invokeCallback(onProgress, pct);
 
           return res.blob();
         })
         .then((blob) => {
-          if (!blob) return;
+          if (!blob || dlState.cancelled) return;
           blobs.push(blob);
 
-          if (total && offset < total) {
-            fetchNext();
-          } else {
+          if (!total || offset >= total) {
             const finalBlob = new Blob(blobs, { type: "video/mp4" });
             triggerSave(finalBlob, filename);
-            if (onComplete) onComplete();
-            postStatus("dl-complete", { id, filename, url, total: finalBlob.size });
+            dlState.finished = true;
             delete window.__TG_DL_ACTIVE[id];
+            postStatus("dl-complete", {
+              id,
+              filename,
+              url,
+              total: finalBlob.size,
+            });
+            invokeCallback(onComplete);
           }
         })
         .catch((err) => {
-          if (err.name === "AbortError") return;
-          console.error("[TG DL] Error:", err);
-          if (onError) onError(err.message);
-          postStatus("dl-error", { id, error: err.message });
+          if (err.name === "AbortError" && dlState.cancelled) return;
+          if (dlState.finished || dlState.cancelled) return;
+          dlState.finished = true;
           delete window.__TG_DL_ACTIVE[id];
+          console.error("[TG DL] Error:", err);
+          postStatus("dl-error", { id, url, error: err.message });
+          invokeCallback(onError, err.message);
+        })
+        .finally(() => {
+          if (dlState.controller === controller) dlState.controller = null;
+          dlState.inFlight = false;
+          if (
+            !dlState.paused &&
+            !dlState.cancelled &&
+            !dlState.finished &&
+            total &&
+            offset < total
+          ) {
+            fetchNext();
+          }
         });
     }
 
     dlState.fetchNext = fetchNext;
     window.__TG_DL_ACTIVE[id] = dlState;
     fetchNext();
+    return id;
   };
 
   function triggerSave(blob, filename) {

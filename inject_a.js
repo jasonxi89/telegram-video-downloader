@@ -8,24 +8,34 @@ if (!window.__TG_DL_A_LOADED) {
   const POLL_MS = 600;
   const COMPLETED_URLS = new Set();
   const ACTIVE_DOWNLOADS = new Set();
+  const DOWNLOAD_PROGRESS = new Map();
 
   function getVideoKey(src) {
     const match = src.match(/document(\d+)/);
     return match ? "doc:" + match[1] : src;
   }
 
-  function createButton(onClick) {
-    const btn = document.createElement("div");
+  function buttonPadding(btn) {
+    if (btn.dataset.variant === "album") return "3px 10px";
+    if (btn.dataset.variant === "viewer") return "8px 14px";
+    return "5px 14px";
+  }
+
+  function createButton(video) {
+    const btn = document.createElement("button");
+    btn.type = "button";
     btn.className = DL_CLASS;
-    btn.textContent = "\u2b07 Download";
+    btn._video = video;
     btn.style.cssText =
-      "display:inline-flex;align-items:center;gap:4px;" +
+      "display:inline-flex;align-items:center;gap:4px;border:0;" +
       "padding:5px 14px;margin-top:6px;border-radius:12px;cursor:pointer;" +
-      "font-size:13px;line-height:18px;color:#fff;font-weight:500;" +
-      "background:rgba(51,144,236,0.85);" +
+      "font:500 13px/18px -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;" +
+      "color:#fff;background:rgba(51,144,236,0.85);" +
       "transition:background 0.15s;user-select:none;";
     btn.addEventListener("mouseenter", () => {
-      if (!btn._completed) btn.style.background = "rgba(51,144,236,1)";
+      if (!btn._completed && !btn.disabled) {
+        btn.style.background = "rgba(51,144,236,1)";
+      }
     });
     btn.addEventListener("mouseleave", () => {
       if (!btn._completed) btn.style.background = "rgba(51,144,236,0.85)";
@@ -33,20 +43,47 @@ if (!window.__TG_DL_A_LOADED) {
     btn.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (btn._completed) return;
-      onClick(btn);
+      startDownload(btn._video, btn);
     });
     return btn;
   }
 
+  function showReady(btn, video) {
+    btn._video = video;
+    btn._completed = false;
+    btn.disabled = false;
+    btn.replaceChildren();
+    btn.textContent = "\u2b07 Download";
+    btn.setAttribute("aria-label", "Download video");
+    btn.style.padding = buttonPadding(btn);
+    btn.style.background = "rgba(51,144,236,0.85)";
+    btn.style.gap = "4px";
+    btn.style.overflow = "";
+  }
+
+  function showDownloading(btn, video, pct) {
+    btn._video = video;
+    btn._completed = false;
+    btn.disabled = true;
+    btn.replaceChildren();
+    btn.textContent = pct == null ? "\u23f3 Downloading..." : "\u23f3 " + pct + "%";
+    btn.setAttribute("aria-label", "Downloading video");
+    btn.style.padding = buttonPadding(btn);
+    btn.style.background = "rgba(51,144,236,0.85)";
+    btn.style.gap = "4px";
+    btn.style.overflow = "";
+  }
+
   function markDone(btn, video) {
+    btn._video = video;
     btn._completed = true;
-    btn.innerHTML = "";
+    btn.disabled = false;
+    btn.replaceChildren();
+    btn.setAttribute("aria-label", "Re-download video");
     btn.style.padding = "0";
     btn.style.background = "transparent";
     btn.style.gap = "0";
     btn.style.overflow = "hidden";
-    btn.style.pointerEvents = "";
 
     const done = document.createElement("span");
     done.textContent = "\u2714 Done";
@@ -58,64 +95,81 @@ if (!window.__TG_DL_A_LOADED) {
     const retry = document.createElement("span");
     retry.textContent = "Re-download";
     retry.style.cssText =
-      "padding:5px 12px;cursor:pointer;" +
-      "background:rgba(51,144,236,0.7);color:#fff;" +
-      "font-size:13px;font-weight:500;line-height:18px;" +
-      "transition:background 0.15s;";
-    retry.addEventListener("mouseenter", () => {
-      retry.style.background = "rgba(51,144,236,1)";
-    });
-    retry.addEventListener("mouseleave", () => {
-      retry.style.background = "rgba(51,144,236,0.7)";
-    });
-    retry.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      startDownload(video, btn);
-    });
+      "padding:5px 12px;background:rgba(51,144,236,0.7);color:#fff;" +
+      "font-size:13px;font-weight:500;line-height:18px;";
     btn.appendChild(retry);
   }
 
+  function syncButton(btn, video) {
+    const src = video && (video.src || video.currentSrc);
+    if (!src) return;
+    const key = getVideoKey(src);
+    btn.dataset.videoKey = key;
+
+    if (ACTIVE_DOWNLOADS.has(key)) {
+      showDownloading(btn, video, DOWNLOAD_PROGRESS.get(key));
+    } else if (COMPLETED_URLS.has(key)) {
+      markDone(btn, video);
+    } else {
+      showReady(btn, video);
+    }
+  }
+
+  function syncButtonsForKey(key) {
+    for (const btn of document.querySelectorAll("." + DL_CLASS)) {
+      if (btn.dataset.videoKey === key && btn._video) {
+        syncButton(btn, btn._video);
+      }
+    }
+  }
+
   function startDownload(video, btn) {
-    const src = video.src || video.currentSrc;
+    const src = video && (video.src || video.currentSrc);
     if (!src) return;
 
     const key = getVideoKey(src);
     if (ACTIVE_DOWNLOADS.has(key)) {
-      btn.textContent = "\u23f3 Downloading...";
-      btn.style.pointerEvents = "none";
+      syncButton(btn, video);
       return;
     }
+
     ACTIVE_DOWNLOADS.add(key);
+    DOWNLOAD_PROGRESS.set(key, 0);
+    syncButtonsForKey(key);
 
-    btn.textContent = "\u23f3 0%";
-    btn.style.padding = "5px 14px";
-    btn.style.background = "rgba(51,144,236,0.85)";
-    btn.style.gap = "4px";
-    btn.style.overflow = "";
-    btn.style.pointerEvents = "none";
-    btn._completed = false;
-
-    window.__TG_DL(src, {
-      onProgress: (pct) => {
-        btn.textContent = "\u23f3 " + pct + "%";
-      },
-      onComplete: () => {
-        ACTIVE_DOWNLOADS.delete(key);
-        COMPLETED_URLS.add(key);
-        markDone(btn, video);
-      },
-      onError: (msg) => {
-        ACTIVE_DOWNLOADS.delete(key);
-        btn.textContent = "\u274c Failed";
-        btn.style.pointerEvents = "";
-        btn._completed = false;
-        console.error("[TG DL A]", msg);
-        setTimeout(() => {
-          btn.textContent = "\u2b07 Download";
-        }, 3000);
-      },
-    });
+    try {
+      if (typeof window.__TG_DL !== "function") {
+        throw new Error("Core downloader is unavailable");
+      }
+      window.__TG_DL(src, {
+        onProgress: (pct) => {
+          DOWNLOAD_PROGRESS.set(key, pct);
+          syncButtonsForKey(key);
+        },
+        onComplete: () => {
+          ACTIVE_DOWNLOADS.delete(key);
+          DOWNLOAD_PROGRESS.delete(key);
+          COMPLETED_URLS.add(key);
+          syncButtonsForKey(key);
+        },
+        onError: (msg) => {
+          ACTIVE_DOWNLOADS.delete(key);
+          DOWNLOAD_PROGRESS.delete(key);
+          syncButtonsForKey(key);
+          console.error("[TG DL A]", msg);
+        },
+        onCancel: () => {
+          ACTIVE_DOWNLOADS.delete(key);
+          DOWNLOAD_PROGRESS.delete(key);
+          syncButtonsForKey(key);
+        },
+      });
+    } catch (err) {
+      ACTIVE_DOWNLOADS.delete(key);
+      DOWNLOAD_PROGRESS.delete(key);
+      syncButtonsForKey(key);
+      console.error("[TG DL A]", err);
+    }
   }
 
   function scan() {
@@ -124,7 +178,6 @@ if (!window.__TG_DL_A_LOADED) {
     for (const video of videos) {
       const src = video.src || video.currentSrc;
       if (!src) continue;
-      if (video.__tgDl) continue;
 
       const msg =
         video.closest(".Message") ||
@@ -141,35 +194,31 @@ if (!window.__TG_DL_A_LOADED) {
         video.parentElement;
       if (!wrapper) continue;
 
-      // Dedup: also check if button already exists (React re-renders lose __tgDl)
-      const hasBtn = albumItem
-        ? albumItem.querySelector("." + DL_CLASS)
+      let btn = albumItem
+        ? albumItem.querySelector(":scope > ." + DL_CLASS)
         : wrapper.nextElementSibling &&
-          wrapper.nextElementSibling.classList.contains(DL_CLASS);
-      if (hasBtn) {
-        video.__tgDl = true;
-        continue;
-      }
+            wrapper.nextElementSibling.classList.contains(DL_CLASS)
+          ? wrapper.nextElementSibling
+          : null;
 
-      video.__tgDl = true;
-      const btn = createButton((b) => startDownload(video, b));
+      if (!btn) {
+        btn = createButton(video);
+        if (albumItem) {
+          btn.dataset.variant = "album";
+          btn.style.cssText +=
+            ";position:absolute;bottom:4px;left:4px;z-index:5;" +
+            "margin-top:0;padding:3px 10px;font-size:12px;";
+          albumItem.style.position = "relative";
+          albumItem.appendChild(btn);
+        } else {
+          wrapper.after(btn);
+        }
+      }
 
       const scanKey = getVideoKey(src);
-      if (COMPLETED_URLS.has(scanKey)) {
-        markDone(btn, video);
-      } else if (ACTIVE_DOWNLOADS.has(scanKey)) {
-        btn.textContent = "\u23f3 Downloading...";
-        btn.style.pointerEvents = "none";
-      }
-
-      if (albumItem) {
-        btn.style.cssText +=
-          ";position:absolute;bottom:4px;left:4px;z-index:5;" +
-          "margin-top:0;padding:3px 10px;font-size:12px;";
-        albumItem.style.position = "relative";
-        albumItem.appendChild(btn);
-      } else {
-        wrapper.after(btn);
+      if (btn.dataset.videoKey !== scanKey || btn._video !== video) {
+        btn._video = video;
+        syncButton(btn, video);
       }
     }
 
@@ -177,98 +226,93 @@ if (!window.__TG_DL_A_LOADED) {
     const viewer =
       document.querySelector("#MediaViewer") ||
       document.querySelector("[class*='MediaViewer']");
-    if (viewer) {
-      if (!viewer.querySelector("." + DL_CLASS)) {
-        const video = viewer.querySelector("video");
-        if (video && (video.src || video.currentSrc)) {
-          // Find button area or create floating button
-          const actions = viewer.querySelector(
-            "[class*='MediaViewerActions'], [class*='actions'], .buttons"
-          );
+    const floatingBtn = document.querySelector(
+      "." + DL_CLASS + '[data-viewer="a"]'
+    );
+    if (!viewer) {
+      if (floatingBtn) floatingBtn.remove();
+      return;
+    }
 
-          const btn = createButton((b) => startDownload(video, b));
+    const video = viewer.querySelector("video");
+    if (!video || !(video.src || video.currentSrc)) return;
 
-          if (actions) {
-            actions.prepend(btn);
-          } else {
-            // Floating button
-            btn.style.cssText +=
-              ";position:fixed;top:16px;right:70px;z-index:2147483647;" +
-              "padding:8px 18px;font-size:14px;border-radius:20px;" +
-              "box-shadow:0 2px 8px rgba(0,0,0,0.3);";
-            document.body.appendChild(btn);
+    const actions = viewer.querySelector(
+      "[class*='MediaViewerActions'], [class*='actions'], .buttons"
+    );
+    let btn = viewer.querySelector("." + DL_CLASS);
+    if (!btn) btn = floatingBtn;
+    if (!btn) {
+      btn = createButton(video);
+      btn.dataset.viewer = "a";
+      btn.dataset.variant = "viewer";
+      btn.style.cssText +=
+        ";margin:0;padding:8px 14px;border-radius:16px;";
+    }
 
-            // Clean up when viewer closes
-            const watcher = setInterval(() => {
-              const still =
-                document.querySelector("#MediaViewer") ||
-                document.querySelector("[class*='MediaViewer']");
-              if (!still) {
-                btn.remove();
-                clearInterval(watcher);
-              }
-            }, 500);
-          }
-        }
-      }
+    if (actions) {
+      if (btn.parentElement !== actions) actions.prepend(btn);
+      btn.style.position = "";
+      btn.style.top = "";
+      btn.style.right = "";
+      btn.style.zIndex = "";
+      btn.style.boxShadow = "";
+    } else if (btn.parentElement !== document.body) {
+      btn.style.position = "fixed";
+      btn.style.top = "16px";
+      btn.style.right = "70px";
+      btn.style.zIndex = "2147483647";
+      btn.style.padding = "8px 18px";
+      btn.style.fontSize = "14px";
+      btn.style.borderRadius = "20px";
+      btn.style.boxShadow = "0 2px 8px rgba(0,0,0,0.3)";
+      document.body.appendChild(btn);
+    }
+
+    const viewerKey = getVideoKey(video.src || video.currentSrc);
+    if (btn.dataset.videoKey !== viewerKey || btn._video !== video) {
+      btn._video = video;
+      syncButton(btn, video);
     }
   }
 
   // Listen for messages from background / download engine
   window.addEventListener("message", (event) => {
-    if (event.source !== window || !event.data) return;
+    if (
+      event.source !== window ||
+      event.origin !== window.location.origin ||
+      !event.data
+    ) {
+      return;
+    }
 
     // Restore completed URLs on page load (persisted across restarts)
     if (event.data.source === "tg-dl-init" && event.data.completedUrls) {
       for (const url of event.data.completedUrls) {
-        COMPLETED_URLS.add(getVideoKey(url));
+        const key = getVideoKey(url);
+        COMPLETED_URLS.add(key);
+        syncButtonsForKey(key);
       }
     }
 
-    // Real-time: sync progress to all buttons with same document ID
-    if (
-      event.data.source === "tg-dl" &&
-      event.data.type === "dl-progress" &&
-      event.data.url
-    ) {
-      const key = getVideoKey(event.data.url);
-      const pct = event.data.pct || 0;
-      for (const video of document.querySelectorAll("video")) {
-        const src = video.src || video.currentSrc;
-        if (!src || getVideoKey(src) !== key) continue;
-        const root =
-          video.closest("[class*='album']") ||
-          video.closest(".Message") ||
-          video.closest(".message") ||
-          video.closest("[class*='message']");
-        const btn = root && root.querySelector("." + DL_CLASS);
-        if (btn && !btn._completed && btn.textContent !== "\u23f3 " + pct + "%") {
-          btn.textContent = "\u23f3 " + pct + "%";
-          btn.style.pointerEvents = "none";
-        }
-      }
-    }
+    if (event.data.source !== "tg-dl" || !event.data.url) return;
 
-    // Real-time: update visible buttons when a download completes
-    if (
-      event.data.source === "tg-dl" &&
-      event.data.type === "dl-complete" &&
-      event.data.url
-    ) {
-      const key = getVideoKey(event.data.url);
+    const key = getVideoKey(event.data.url);
+    if (event.data.type === "dl-progress") {
+      ACTIVE_DOWNLOADS.add(key);
+      DOWNLOAD_PROGRESS.set(key, event.data.pct || 0);
+    } else if (event.data.type === "dl-complete") {
+      ACTIVE_DOWNLOADS.delete(key);
+      DOWNLOAD_PROGRESS.delete(key);
       COMPLETED_URLS.add(key);
-      for (const video of document.querySelectorAll("video")) {
-        const src = video.src || video.currentSrc;
-        if (!src || getVideoKey(src) !== key) continue;
-        const root =
-          video.closest("[class*='album']") ||
-          video.closest(".Message") ||
-          video.closest(".message") ||
-          video.closest("[class*='message']");
-        const btn = root && root.querySelector("." + DL_CLASS);
-        if (btn && !btn._completed) markDone(btn, video);
-      }
+    } else if (
+      event.data.type === "dl-error" ||
+      event.data.type === "dl-cancel"
+    ) {
+      ACTIVE_DOWNLOADS.delete(key);
+      DOWNLOAD_PROGRESS.delete(key);
     }
+    syncButtonsForKey(key);
   });
 
   setInterval(scan, POLL_MS);
