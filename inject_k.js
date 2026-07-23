@@ -10,6 +10,9 @@ if (!window.__TG_DL_K_LOADED) {
   const ACTIVE_DOWNLOADS = new Set();
   const DOWNLOAD_PROGRESS = new Map();
   const SOURCE_KEYS = new Map();
+  const SIGNATURE_KEYS = new Map();
+  const BLOB_KEY_PROMISES = new Map();
+  const UNRESOLVED_BLOBS = new Set();
 
   function getMessageKey(video) {
     if (!video || typeof video.closest !== "function") return "";
@@ -20,6 +23,56 @@ if (!window.__TG_DL_K_LOADED) {
     const peerId = owner.dataset.peerId || bubble.dataset.peerId;
     const mid = owner.dataset.mid;
     return peerId && mid ? "msg:" + peerId + ":" + mid : "";
+  }
+
+  function getStreamIdentity(src) {
+    if (!src.includes("stream/")) return null;
+    try {
+      const encoded = src.split("stream/")[1].split(/[?#]/)[0];
+      const metadata = JSON.parse(decodeURIComponent(encoded));
+      const id = metadata.location && metadata.location.id;
+      const size = Number(metadata.size);
+      return {
+        key: id ? "doc:" + id : "",
+        size: Number.isFinite(size) && size > 0 ? size : 0,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  function getMediaSignature(size, video) {
+    const duration = Number(video && video.duration);
+    const width = Number(video && video.videoWidth);
+    const height = Number(video && video.videoHeight);
+    if (!size || !Number.isFinite(duration) || duration <= 0 || !width || !height) {
+      return "";
+    }
+    return [size, Math.round(duration * 1000), width, height].join(":");
+  }
+
+  function registerUniqueKey(map, identity, key) {
+    if (!identity || !key) return false;
+    const existing = map.get(identity);
+    if (existing === undefined) {
+      map.set(identity, key);
+    } else if (existing && existing !== key) {
+      // Different documents with the same identity are ambiguous; never guess.
+      map.set(identity, "");
+    } else {
+      return false;
+    }
+    if (map.size > 500) map.delete(map.keys().next().value);
+    return true;
+  }
+
+  function registerMediaKey(size, video, key) {
+    const signature = getMediaSignature(size, video);
+    if (!registerUniqueKey(SIGNATURE_KEYS, signature, key)) return;
+
+    // A viewer may have appeared before its inline stream was scanned.
+    for (const src of UNRESOLVED_BLOBS) BLOB_KEY_PROMISES.delete(src);
+    UNRESOLVED_BLOBS.clear();
   }
 
   function rememberSourceKey(src, key) {
@@ -46,21 +99,82 @@ if (!window.__TG_DL_K_LOADED) {
   }
 
   function getVideoKey(src, video) {
+    const streamIdentity = getStreamIdentity(src);
+    if (streamIdentity && streamIdentity.key) {
+      rememberSourceKey(src, streamIdentity.key);
+      registerMediaKey(streamIdentity.size, video, streamIdentity.key);
+      return streamIdentity.key;
+    }
+
+    const docMatch = src.match(/document(\d+)/);
+    if (docMatch) return "doc:" + docMatch[1];
+
     const messageKey = findMessageKeyBySource(src, video);
     if (messageKey) {
       rememberSourceKey(src, messageKey);
       return messageKey;
     }
-
-    const docMatch = src.match(/document(\d+)/);
-    if (docMatch) return "doc:" + docMatch[1];
-    if (src.includes("stream/")) {
-      try {
-        const json = JSON.parse(decodeURIComponent(src.split("stream/")[1]));
-        if (json.location && json.location.id) return "doc:" + json.location.id;
-      } catch {}
-    }
     return src;
+  }
+
+  function resolveBlobKey(src, video) {
+    if (!src.startsWith("blob:")) return Promise.resolve("");
+    if (!getMediaSignature(1, video)) return Promise.resolve(null);
+    if (BLOB_KEY_PROMISES.has(src)) return BLOB_KEY_PROMISES.get(src);
+
+    const promise = fetch(src, {
+      headers: { Range: "bytes=0-0" },
+    })
+      .then(async (response) => {
+        const range = response.headers.get("Content-Range") || "";
+        const match =
+          response.status === 206 && range.match(/^bytes 0-0\/(\d+)$/);
+        const size = match && Number(match[1]);
+        if (!size || !Number.isSafeInteger(size)) {
+          try {
+            await response.body?.cancel();
+          } catch {}
+          return "";
+        }
+        await response.arrayBuffer();
+
+        const signature = getMediaSignature(size, video);
+        let hasIdentity = false;
+        let key = "";
+        if (signature && SIGNATURE_KEYS.has(signature)) {
+          hasIdentity = true;
+          key = SIGNATURE_KEYS.get(signature);
+        }
+
+        if (!hasIdentity) {
+          UNRESOLVED_BLOBS.add(src);
+          if (UNRESOLVED_BLOBS.size > 500) {
+            UNRESOLVED_BLOBS.delete(UNRESOLVED_BLOBS.values().next().value);
+          }
+          return "";
+        }
+        if (key) {
+          UNRESOLVED_BLOBS.delete(src);
+          rememberSourceKey(src, key);
+        }
+        return key;
+      })
+      .catch(() => "");
+    BLOB_KEY_PROMISES.set(src, promise);
+    if (BLOB_KEY_PROMISES.size > 500) {
+      BLOB_KEY_PROMISES.delete(BLOB_KEY_PROMISES.keys().next().value);
+    }
+    return promise;
+  }
+
+  async function resolveVideoKey(src, video) {
+    const key = getVideoKey(src, video);
+    if (key !== src || !src.startsWith("blob:")) return key;
+    return (await resolveBlobKey(src, video)) || key;
+  }
+
+  function needsBlobResolution(src, key) {
+    return src.startsWith("blob:") && key === src && !SOURCE_KEYS.has(src);
   }
 
   function getViewerVideo(viewer) {
@@ -176,6 +290,13 @@ if (!window.__TG_DL_K_LOADED) {
     } else {
       showReady(btn, video);
     }
+
+    if (key === src && src.startsWith("blob:")) {
+      void resolveBlobKey(src, video).then((resolvedKey) => {
+        const currentSrc = video.src || video.currentSrc;
+        if (resolvedKey && currentSrc === src) syncButton(btn, video);
+      });
+    }
   }
 
   function syncButtonsForKey(key) {
@@ -186,11 +307,26 @@ if (!window.__TG_DL_K_LOADED) {
     }
   }
 
-  function startDownload(video, btn) {
+  async function startDownload(video, btn) {
     const src = video && (video.src || video.currentSrc);
     if (!src) return;
 
-    const key = getVideoKey(src, video);
+    btn.disabled = true;
+    let key;
+    try {
+      key = await resolveVideoKey(src, video);
+    } catch (err) {
+      console.error("[TG DL K] Failed to identify video:", err);
+      syncButton(btn, getLiveButtonVideo(btn) || video);
+      return;
+    }
+
+    const liveVideo = getLiveButtonVideo(btn) || video;
+    const currentSrc = liveVideo.src || liveVideo.currentSrc;
+    if (liveVideo !== video || currentSrc !== src) {
+      syncButton(btn, liveVideo);
+      return;
+    }
     if (ACTIVE_DOWNLOADS.has(key)) {
       syncButton(btn, video);
       return;
@@ -277,7 +413,11 @@ if (!window.__TG_DL_K_LOADED) {
       }
 
       const scanKey = getVideoKey(src, video);
-      if (btn.dataset.videoKey !== scanKey || btn._video !== video) {
+      if (
+        btn.dataset.videoKey !== scanKey ||
+        btn._video !== video ||
+        needsBlobResolution(src, scanKey)
+      ) {
         btn._video = video;
         syncButton(btn, video);
       }
@@ -341,7 +481,12 @@ if (!window.__TG_DL_K_LOADED) {
     }
 
     const viewerKey = getVideoKey(video.src || video.currentSrc, video);
-    if (btn.dataset.videoKey !== viewerKey || btn._video !== video) {
+    const viewerSrc = video.src || video.currentSrc;
+    if (
+      btn.dataset.videoKey !== viewerKey ||
+      btn._video !== video ||
+      needsBlobResolution(viewerSrc, viewerKey)
+    ) {
       btn._video = video;
       syncButton(btn, video);
     }
