@@ -68,6 +68,7 @@ let downloads = {};
 let completedUrls = [];
 let popupPort = null;
 const pendingCancelTimers = new Map();
+const pendingCommandTimers = new Map();
 
 function extractDocKey(url) {
   if (!url) return url;
@@ -190,8 +191,10 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
     if (data.downloads && typeof data.downloads === "object") {
       const now = Date.now();
       for (const dl of Object.values(data.downloads)) {
+        if (!dl) continue;
+        // Transient command-feedback note must not survive a SW restart
+        delete dl.commandError;
         if (
-          dl &&
           (dl.status === "active" ||
             dl.status === "paused" ||
             dl.status === "cancelling") &&
@@ -281,6 +284,38 @@ function requestCancel(dl) {
   });
 }
 
+function clearPendingCommand(id) {
+  const timer = pendingCommandTimers.get(id);
+  if (timer) clearTimeout(timer);
+  pendingCommandTimers.delete(id);
+}
+
+// Pause/resume are not destructive, so an unconfirmed command keeps the
+// truthful status and surfaces a transient note instead of flipping to error.
+function markCommandUnconfirmed(id, action) {
+  clearPendingCommand(id);
+  const dl = downloads[id];
+  if (!dl) return;
+  dl.commandError =
+    (action === "pause" ? "Pause" : "Resume") +
+    " was not confirmed by the page";
+  dl.updatedAt = Date.now();
+  sendToPopup({ type: "dl-update", download: dl });
+}
+
+function requestPauseResume(dl, action) {
+  if (pendingCommandTimers.has(dl.id)) return;
+  delete dl.commandError;
+  const timer = setTimeout(() => {
+    markCommandUnconfirmed(dl.id, action);
+  }, 2000);
+  pendingCommandTimers.set(dl.id, timer);
+  // Status is not updated here — the dl-pause/dl-resume ack does it.
+  sendCommand(dl.tabId, action, dl.id).catch(() => {
+    markCommandUnconfirmed(dl.id, action);
+  });
+}
+
 // Status updates from content script
 chrome.runtime.onMessage.addListener((rawMsg, sender) => {
   const msg = normalizeStatusMessage(rawMsg, sender);
@@ -291,6 +326,13 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
   if (downloads[id] && downloads[id].tabId !== tabId) return;
   if (type === "dl-complete" || type === "dl-error" || type === "dl-cancel") {
     clearPendingCancel(id);
+  }
+  // Acks and terminal states settle any pending pause/resume command.
+  // dl-progress deliberately does not: it proves the bridge is alive but not
+  // that the command was applied.
+  if (type !== "dl-start" && type !== "dl-progress") {
+    clearPendingCommand(id);
+    if (downloads[id]) delete downloads[id].commandError;
   }
 
   if (type === "dl-start") {
@@ -429,16 +471,9 @@ chrome.runtime.onConnect.addListener((port) => {
     const dl = downloads[msg.id];
 
     if (msg.action === "pause" && dl && dl.status === "active") {
-      sendCommand(dl.tabId, "pause", msg.id).catch(() => {
-        // Command failed to reach downloader — notify popup
-        sendToPopup({ type: "dl-update", download: dl });
-      });
-      // Don't update status here — wait for dl-pause confirmation from downloader
+      requestPauseResume(dl, "pause");
     } else if (msg.action === "resume" && dl && dl.status === "paused") {
-      sendCommand(dl.tabId, "resume", msg.id).catch(() => {
-        sendToPopup({ type: "dl-update", download: dl });
-      });
-      // Don't update status here — wait for dl-resume confirmation from downloader
+      requestPauseResume(dl, "resume");
     } else if (
       msg.action === "cancel" &&
       dl &&

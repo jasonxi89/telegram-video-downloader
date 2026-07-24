@@ -75,7 +75,7 @@ function createDownloadItem(download) {
           : status === "complete"
           ? "Done"
           : "Failed";
-  const detail =
+  const baseDetail =
     status === "active"
       ? formatSize(dl.offset) + " / " + formatSize(dl.total) + speedText
       : status === "paused" || status === "cancelling"
@@ -85,6 +85,10 @@ function createDownloadItem(download) {
           : typeof dl.error === "string"
             ? dl.error
             : "Download failed";
+  const detail =
+    typeof dl.commandError === "string" && dl.commandError
+      ? baseDetail + " · ⚠ " + dl.commandError
+      : baseDetail;
 
   const item = document.createElement("div");
   item.className = "dl-item";

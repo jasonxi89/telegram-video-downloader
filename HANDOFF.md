@@ -8,7 +8,7 @@ Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支�
 - macOS 路径: `/Users/vn59ngs/Documents/personal/telegram-video-downloader`
 
 ## 当前状态
-- 版本 **v2.10.0**（基于已实机验证可正常下载的 v2.9.3 working baseline 做 P0 hardening）
+- 版本 **v2.10.1**（v2.10.0 = P0 hardening；v2.10.1 = pause/resume 命令失败可见反馈）
 - 功能可用：聊天内 + 全屏查看器下载按钮、下载进度显示、Popup 下载队列面板（进度/速度/文件名）、Badge 显示活跃下载数、暂停/恢复/取消/删除、Done 条目保留 + 重下载、album 多视频、同一视频多按钮进度同步、防重复下载
 - v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、inline/album 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义；**Web K viewer 按钮状态同步仍未解决**（实测 viewer blob 为 MSE，见 TODO）
 - `postMessage` 已加入 origin/type/schema/sender/tab ownership 校验，但 MAIN world 与 Telegram 页面同信任域，真正的通道认证及公开 `window.__TG_DL` API 收口仍待设计；P1/P2 其余清单见下方
@@ -71,7 +71,7 @@ icons/           16/48/128 png
 - [ ] 暂停时进度仍更新 offset/total/pct，与代码注释矛盾
 - [x] popup port 竞态：v2.10.0 stale disconnect 仅在 `popupPort === port` 时清空活跃 port
 - [ ] 冷启动与 popup onConnect 的 staleness 清理逻辑不一致，paused 条目可能永久卡住
-- [ ] pause/resume 命令失败静默回显旧状态，用户无感知
+- [x] pause/resume 命令失败静默回显旧状态：v2.10.1 增加 pendingCommandTimers（2s ack 超时）+ 投递失败即时反馈；两种失败都在条目 detail 行显示 "⚠ Pause/Resume was not confirmed by the page"（transient `commandError` 字段，不改真实 status，ack/终态到达即清除，SW 重启不残留）；回归测试 scratchpad test_pause_feedback.js 三场景全过
 - [x] 注入下载/Re-download 控件不可键盘操作：v2.10.0 改为原生 button，并为 Popup progress 增加 ARIA 语义
 
 ### PR #1 审查跟进（2026-07-23）
