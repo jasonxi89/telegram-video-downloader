@@ -81,7 +81,7 @@ icons/           16/48/128 png
 - [x] Minor：移除无人监听的 bridge-error 页面消息、下载 ID 固定补齐 6 位、content origin 改为动态同源、本文档补充 cancel timer 说明
 - [x] `f373ea4` 复审 blocker → `5d483d6` 签名桥接实现正确但**实测假设不成立**（2026-07-23 Playwright 登录态实测 @TelegramTips：viewer blob 为 MSE 不可 fetch + viewer/inline 清晰度层不同）；决定按选项 A：重标 P0 同步项为 open，机制保留（对 inline/album key 稳定有价值），viewer 同步转 follow-up issue
 - [x] 登录态实测（2026-07-23，Playwright + 用户扫码）：确认 Web K inline=`stream/{JSON}`、viewer=MSE blob（不可 fetch）；**自定义 viewer 按钮 fetch blob 永远无法下载流式视频（v2.9.3 baseline 亦然），unhide 原生下载按钮是 viewer 唯一可靠下载路径**
-- [ ] 装扩展后的 7 项 Chrome 功能手测（PR 描述清单）：仍需用户完成后 release
+- [x] 装扩展后的 7 项 Chrome 功能手测（PR 描述清单）：用户于 2026-07-23 在 v2.10.1 上完成（测试中发现的 pause 反馈问题已随 v2.10.1 修复；pause 粒度限制转 issue #3）
 
 修复时按 P0 → P1 → P2 顺序；每批修完 bump manifest.json 版本 + 更新本文档和项目 memory。任何下载核心改动必须保留 v2.9.3 已实机验证 working 的 MAIN-world + 顺序 Range baseline，异常 hardening 需用定向回归证明不改变正常响应路径。
 
