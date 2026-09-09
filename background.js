@@ -193,6 +193,7 @@ function saveStateNow() {
 // Restore first, replay received events in order, then classify stale rows.
 chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
   try {
+    data = data && typeof data === "object" ? data : {};
     if (Array.isArray(data.completedUrls)) {
       for (const url of data.completedUrls) {
         if (typeof url === "string" && !completedUrls.includes(url)) {
@@ -201,15 +202,21 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
       }
     }
     if (data.downloads && typeof data.downloads === "object") {
-      downloads = { ...data.downloads };
-      for (const dl of Object.values(downloads)) {
-        if (dl) delete dl.commandError;
+      for (const [id, dl] of Object.entries(data.downloads)) {
+        if (!DOWNLOAD_ID_PATTERN.test(id) || !dl || typeof dl !== "object" ||
+            Array.isArray(dl) || dl.id !== id) continue;
+        downloads[id] = { ...dl };
+        delete downloads[id].commandError;
       }
     }
     // Use the same handler as live delivery; activity followed by error/cancel
     // must not become a resurrected active row, even across worker startup.
     for (const event of restoringMessages) {
-      applyStatusMessage(event.msg, event.tabId, event.observedAt);
+      try {
+        applyStatusMessage(event.msg, event.tabId, event.observedAt);
+      } catch (err) {
+        console.error("[TG DL] Failed to replay status", event.msg.id, err);
+      }
     }
     const now = Date.now();
     for (const dl of Object.values(downloads)) {
@@ -221,7 +228,8 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
       }
     }
     stateRestored = true;
-    updateBadge();
+    // Badge/UI failures must not suppress authoritative persistence/snapshot.
+    try { updateBadge(); } catch (err) { console.warn("[TG DL] Badge unavailable", err); }
     saveStateNow();
     sendToPopup({ type: "state-snapshot", downloads: { ...downloads } });
   } catch (err) {
@@ -235,7 +243,7 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
 
 function updateBadge() {
   const activeCount = Object.values(downloads).filter(
-    (d) => d.status === "active"
+    (d) => d && d.status === "active"
   ).length;
   if (activeCount > 0) {
     chrome.action.setBadgeText({ text: String(activeCount) });

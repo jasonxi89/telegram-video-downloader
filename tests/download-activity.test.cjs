@@ -14,7 +14,7 @@ function event() {
 }
 
 // Real downloader -> real content bridge -> real background, all in local VMs.
-function integration({ deliverCommands = true, delayRestore = false } = {}) {
+function integration({ deliverCommands = true, delayRestore = false, badgeThrows = false } = {}) {
   let now = 0;
   let restore;
   let timerId = 0;
@@ -26,8 +26,10 @@ function integration({ deliverCommands = true, delayRestore = false } = {}) {
   const contentMessage = event();
   const pageMessage = event();
   const sentCommands = [];
+  const storageWrites = [];
+  const popupMessages = [];
   const background = vm.createContext({
-    URL, Date: Clock, console,
+    URL, Date: Clock, console: { ...console, error() {}, warn() {} },
     setTimeout(fn, delay) { const id = ++timerId; timers.set(id, { fn, at: now + delay }); return id; },
     clearTimeout(id) { timers.delete(id); },
     chrome: {
@@ -44,9 +46,12 @@ function integration({ deliverCommands = true, delayRestore = false } = {}) {
           restore = callback;
           if (!delayRestore) queueMicrotask(() => callback({}));
         },
-        async set() {},
+        async set(data) { storageWrites.push(structuredClone(data)); },
       } },
-      action: { setBadgeText() {}, setBadgeBackgroundColor() {} },
+      action: {
+        setBadgeText() { if (badgeThrows) throw new Error("badge unavailable"); },
+        setBadgeBackgroundColor() {},
+      },
     },
   });
   const load = (file, context) => vm.runInContext(
@@ -68,7 +73,7 @@ function integration({ deliverCommands = true, delayRestore = false } = {}) {
   });
   load("content.js", bridge);
   return {
-    sentCommands,
+    sentCommands, storageWrites, popupMessages,
     restore(data) { restore(data); },
     pageSend(message, origin = bridgeWindow.location.origin, source = bridgeWindow) {
       pageMessage.emit({ source, origin, data: message });
@@ -91,7 +96,8 @@ function integration({ deliverCommands = true, delayRestore = false } = {}) {
       return run;
     },
     popup() {
-      const port = { name: "popup", onMessage: event(), onDisconnect: event(), postMessage() {} };
+      const port = { name: "popup", onMessage: event(), onDisconnect: event(),
+        postMessage(message) { popupMessages.push(structuredClone(message)); } };
       connects.emit(port);
       return { command(action, id) { port.onMessage.emit({ action, id }); } };
     },
@@ -353,4 +359,50 @@ test("queued foreign status cannot mutate the restored owner's download", async 
   app.restore({ downloads: { [id]: persistedDownload(id) } });
   assert.equal(app.state()[id].status, "active");
   assert.equal(app.state()[id].error, undefined);
+});
+
+for (const stored of [undefined, { downloads: { dl_9_abcdef: null, bad: 42 } }]) {
+  test(`invalid storage (${stored ? "null row" : "missing snapshot"}) does not discard live events`, () => {
+    const app = integration({ delayRestore: true });
+    app.popup();
+    for (let i = 1; i <= 3; i++) {
+      app.send({ source: "tg-dl", type: "dl-start", id: `dl_${i}_abcdef`,
+        url: "https://web.telegram.org/progressive/document123", filename: `${i}.mp4` });
+    }
+    app.restore(stored);
+    assert.equal(Object.keys(app.state()).length, 3);
+    for (let i = 1; i <= 3; i++) assert.equal(app.state()[`dl_${i}_abcdef`].filename, `${i}.mp4`);
+    assert.equal(app.storageWrites.length, 1);
+    assert.equal(Object.keys(app.storageWrites[0].downloads).length, 3);
+    assert.equal(Object.keys(app.popupMessages.at(-1).downloads).length, 3);
+  });
+}
+
+test("one replay side-effect failure does not discard later events or final snapshot", () => {
+  const app = integration({ delayRestore: true, badgeThrows: true });
+  for (let i = 1; i <= 3; i++) app.send({ source: "tg-dl", type: "dl-start",
+    id: `dl_${i}_abcdef`, url: "https://web.telegram.org/progressive/document123", filename: `${i}.mp4` });
+  app.restore({});
+  assert.equal(Object.keys(app.state()).length, 3);
+  assert.equal(app.storageWrites.length, 1);
+  assert.equal(Object.keys(app.storageWrites[0].downloads).length, 3);
+});
+
+test("replay publishes only one authoritative write and snapshot, no intermediate updates", () => {
+  const app = integration({ delayRestore: true });
+  app.popup();
+  const id = "dl_0_abcdef";
+  const message = { source: "tg-dl", id, url: "https://web.telegram.org/progressive/document123" };
+  app.send({ ...message, type: "dl-start", filename: "123.mp4" });
+  app.send({ ...message, type: "dl-activity" });
+  app.send({ ...message, type: "dl-progress", offset: 3, total: 6, pct: 50 });
+  app.send({ ...message, type: "dl-error", error: "disconnected" });
+  assert.equal(app.storageWrites.length, 0);
+  app.restore({});
+  assert.equal(app.storageWrites.length, 1);
+  assert.equal(app.storageWrites[0].downloads[id].status, "error");
+  assert.deepEqual(app.popupMessages.map((m) => m.type), ["state-snapshot", "state-snapshot"]);
+  assert.equal(app.popupMessages.at(-1).downloads[id].error, "disconnected");
+  app.tick(2001);
+  assert.equal(app.storageWrites.length, 1, "no intermediate progress save timer survives replay");
 });
