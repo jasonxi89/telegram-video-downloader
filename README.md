@@ -64,6 +64,21 @@ popup.html / popup.js / popup.css — Download queue panel UI
 
 **为什么用 MAIN world？** Telegram 的 Service Worker 拦截 `/progressive/` URL，通过 MTProto 协议流式传输视频数据。Chrome 默认的 ISOLATED world 中的脚本无法正确接收这些数据（只能拿到垃圾响应）。注入到页面的 MAIN world 后，`fetch()` 能正确经过 Service Worker 拿到真实视频数据。
 
+## Local regression tests / 本地回归测试
+
+Requires Node.js 22+; no packages or build step:
+
+```sh
+node --test tests/*.test.cjs
+```
+
+Tests execute the real download engine with mocked Fetch/DOM APIs. They cover
+sequential byte assembly, invalid Range responses, body completion timing,
+pause/resume/cancel, and UI callback failures. No Telegram connection or real
+file download occurs. These tests do not replace Chrome Web K/A smoke tests.
+
+本地测试不访问 Telegram、不保存视频；不能替代真实 Chrome 登录态功能验证。
+
 ## Development Journey / 开发历程
 
 Building this extension was a series of lessons in how Telegram Web actually works under the hood. Here's what we tried, what failed, and why.

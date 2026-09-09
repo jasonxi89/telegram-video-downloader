@@ -44,6 +44,44 @@ if (!window.__TG_DL_LOADED) {
     window.postMessage({ source: "tg-dl", type, ...detail }, PAGE_ORIGIN);
   }
 
+  // Validate headers before reading a body. Never guess at missing ranges.
+  function responsePlan(res, requestedOffset, expectedTotal) {
+    if (res.status !== 200 && res.status !== 206) {
+      throw new Error("HTTP " + res.status);
+    }
+    const range = res.headers.get("Content-Range");
+    if (res.status === 200) {
+      if (requestedOffset !== 0 || range !== null) {
+        throw new Error("Unexpected full response during ranged download");
+      }
+      const length = res.headers.get("Content-Length");
+      const encoding = res.headers.get("Content-Encoding");
+      // Fetch decodes content encoding; encoded Content-Length is not blob.size.
+      const useLength = length !== null && (!encoding || encoding === "identity");
+      const size = useLength ? Number(length) : null;
+      if (useLength && (!/^\d+$/.test(length) || !Number.isSafeInteger(size) || size <= 0)) {
+        throw new Error("Invalid Content-Length");
+      }
+      return { size, total: size };
+    }
+
+    const match = range && range.match(RANGE_REGEX);
+    if (!match) throw new Error("Invalid or missing Content-Range");
+    const [start, end, total] = match.slice(1).map(Number);
+    const encoding = res.headers.get("Content-Encoding");
+    if (encoding && encoding !== "identity") {
+      throw new Error("Encoded partial responses are not supported");
+    }
+    if (
+      ![start, end, total].every(Number.isSafeInteger) ||
+      start !== requestedOffset || end < start || end >= total ||
+      (expectedTotal !== 0 && total !== expectedTotal)
+    ) {
+      throw new Error("Inconsistent Content-Range");
+    }
+    return { size: end - start + 1, total };
+  }
+
   function invokeCallback(callback, ...args) {
     if (typeof callback !== "function") return;
     try {
@@ -123,28 +161,25 @@ if (!window.__TG_DL_LOADED) {
       const controller = new AbortController();
       dlState.controller = controller;
 
+      const requestedOffset = offset;
       fetch(url, {
         method: "GET",
-        headers: { Range: "bytes=" + offset + "-" },
+        headers: { Range: "bytes=" + requestedOffset + "-" },
         signal: controller.signal,
       })
-        .then((res) => {
-          if (res.status !== 200 && res.status !== 206) {
-            throw new Error("HTTP " + res.status);
+        .then(async (res) => {
+          if (dlState.cancelled) return;
+          const plan = responsePlan(res, requestedOffset, total);
+          const blob = await res.blob();
+          if (dlState.cancelled) return;
+          if (blob.size === 0 || (plan.size !== null && blob.size !== plan.size)) {
+            throw new Error("Response body length does not match expected bytes");
           }
 
-          const range = res.headers.get("Content-Range");
-          const match = range && range.match(RANGE_REGEX);
-
-          if (match) {
-            offset = parseInt(match[2]) + 1;
-            total = parseInt(match[3]);
-          } else if (res.status === 200) {
-            // No Content-Range: server ignored Range header, treat as full response
-            total = parseInt(res.headers.get("Content-Length")) || 0;
-            offset = total;
-          }
-
+          // Commit only fully received, validated bytes. Pause drains this chunk.
+          blobs.push(blob);
+          offset = requestedOffset + blob.size;
+          total = plan.total === null ? blob.size : plan.total;
           const now = Date.now();
           const elapsed = now - lastTime;
           if (elapsed > 300) {
@@ -168,13 +203,9 @@ if (!window.__TG_DL_LOADED) {
           });
           if (total) invokeCallback(onProgress, pct);
 
-          return res.blob();
-        })
-        .then((blob) => {
-          if (!blob || dlState.cancelled) return;
-          blobs.push(blob);
-
-          if (!total || offset >= total) {
+          // A callback may synchronously cancel the download.
+          if (dlState.cancelled) return;
+          if (offset === total) {
             const finalBlob = new Blob(blobs, { type: "video/mp4" });
             triggerSave(finalBlob, filename);
             dlState.finished = true;
@@ -193,6 +224,8 @@ if (!window.__TG_DL_LOADED) {
           if (err.name === "AbortError" && dlState.cancelled) return;
           if (dlState.finished || dlState.cancelled) return;
           dlState.finished = true;
+          // Header validation may fail before the body is read: stop that fetch.
+          controller.abort();
           delete window.__TG_DL_ACTIVE[id];
           console.error("[TG DL] Error:", err);
           postStatus("dl-error", { id, url, key, error: err.message });

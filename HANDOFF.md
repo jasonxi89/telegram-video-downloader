@@ -1,5 +1,5 @@
 # HANDOFF — telegram-video-downloader
-> 跨 agent/IDE 接手文档 | 最后更新: 2026-07-23 | 改动项目后请同步更新此文档
+> 跨 agent/IDE 接手文档 | 最后更新: 2026-09-08 | 改动项目后请同步更新此文档
 
 ## 项目定位
 Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支持 Web K（`blob:` URL）和 Web A（`progressive/` 流式 URL）。纯前端扩展，**不是 NAS 服务，无后端、无部署流程、无构建步骤**。
@@ -8,11 +8,11 @@ Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支�
 - macOS 路径: `/Users/vn59ngs/Documents/personal/telegram-video-downloader`
 
 ## 当前状态
-- 版本 **v2.10.1**（v2.10.0 = P0 hardening；v2.10.1 = pause/resume 命令失败可见反馈）
+- 版本 **v2.10.2（开发中，未 release）**：基于 v2.10.1，增加顺序 Range 完整性校验；本轮 Chrome 登录态回归尚未执行。
 - 功能可用：聊天内 + 全屏查看器下载按钮、下载进度显示、Popup 下载队列面板（进度/速度/文件名）、Badge 显示活跃下载数、暂停/恢复/取消/删除、Done 条目保留 + 重下载、album 多视频、同一视频多按钮进度同步、防重复下载
 - v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、inline/album 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义；**Web K viewer 按钮状态同步仍未解决**（实测 viewer blob 为 MSE，见 TODO）
 - `postMessage` 已加入 origin/type/schema/sender/tab ownership 校验，但 MAIN world 与 Telegram 页面同信任域，真正的通道认证及公开 `window.__TG_DL` API 收口仍待设计；P1/P2 其余清单见下方
-- 当前开发分支：`fix/p0-reliability-security`
+- 当前开发分支：`fix/download-integrity`（基线 `a2875d0` / main v2.10.1）
 
 ## 技术栈与结构
 纯 JS，无第三方依赖。消息流：`MAIN world → content.js 桥 → background(SW) → popup`。
@@ -57,11 +57,11 @@ icons/           16/48/128 png
 - [x] 扩展 reload 后消息桥静默死亡：v2.10.0 content bridge 增加失败上报和 generation guard，SW 在 install/startup 为现有 Telegram tabs 重新注入 bridge
 
 ### P1 — 低概率但已确认
-- [ ] mid-download 服务器返回 200 替代 206 → 整文件追加到部分 chunk，静默损坏（正常 Telegram 顺序 Range 路径已实机验证 working；异常响应 hardening 不得改变正常路径）
-- [ ] Content-Range 异常格式或范围不连续被静默接受 → 文件截断/缺块却报成功
+- [x] v2.10.2：中途 200 明确失败且不保存；首次无 Content-Range 的 200 整文件仍支持。
+- [x] v2.10.2：206 强制安全整数、起点等于请求 offset、合法终点、total 不变、实际 body 长度匹配；不满足则 abort/error，不保存、不上报无效进度。
 - [x] SW 冷启动竞态：v2.10.0 为 dl-progress skeleton 保留已校验的 url，并用 `stateReady` 屏障保证 completedUrls/Popup snapshot 在恢复后同步
 - [ ] 下载进度的 setTimeout 存储节流仍非 MV3-suspend-safe，SW idle-kill 可能丢挂起写入；Cancel ACK 已改为先持久化 `cancelling`，重启/Popup stale sweep 可恢复为 error，不再只依赖内存 timer
-- [ ] 无 forward-progress guard：异常代理重复返回同一 Content-Range 会无限循环
+- [x] v2.10.2：严格连续范围和非空 body 保证 offset 前进，重复块/跳块/重叠块均失败。
 
 ### P2 — 质量/体验
 - [x] 用户取消被误报为下载失败：v2.10.0 分离 onCancel/onError，并要求 background 收到 dl-cancel ACK 后才删除；`cancelling` 状态先持久化，失败、超时或 SW suspend 后恢复均保留可见 error
@@ -84,6 +84,15 @@ icons/           16/48/128 png
 - [x] 装扩展后的 7 项 Chrome 功能手测（PR 描述清单）：用户于 2026-07-23 在 v2.10.1 上完成（测试中发现的 pause 反馈问题已随 v2.10.1 修复；pause 粒度限制转 issue #3）
 
 修复时按 P0 → P1 → P2 顺序；每批修完 bump manifest.json 版本 + 更新本文档和项目 memory。任何下载核心改动必须保留 v2.9.3 已实机验证 working 的 MAIN-world + 顺序 Range baseline，异常 hardening 需用定向回归证明不改变正常响应路径。
+
+## v2.10.2 下载完整性加固（2026-09-08）
+- 自动测试：Node.js 22+，运行 `node --test tests/*.test.cjs`；无依赖、无网络、无真实下载，执行实际 downloader.js 的 VM harness。
+- 保留 MAIN world、顺序 `Range: bytes=<offset>-`、暂停允许当前 chunk 收尾、取消 ACK 和 UI callback 隔离。
+- body 完整读取且校验通过后才追加 Blob、推进 offset/total、计算速度和发送进度；取消后的迟到 body 不再产生进度或保存。
+- 首次 200 支持无 Content-Length；identity 编码有长度时必须与 body 匹配。编码后的 200 以 Fetch 解码后的 body 大小为准；编码的 206 保守拒绝，避免把编码字节范围用于解码后的字节。
+- 长度/范围校验不等于内容校验：相同长度的错误内容、无长度 200 的服务端静默截断不在本轮可验证范围内。
+- 本轮不改 Viewer、并行策略、流式落盘或 background 状态机。30 秒 stale 误报仍需后续处理；body 完成前不报告进度意味着慢 chunk 期间 Popup 可能继续误报失败。
+- 独立模型审查及本轮 Chrome 功能验证：待完成；不得沿用 v2.10.1 的实机结果宣称新版已 release。
 
 ## 相关资源
 - Memory: `C:\Users\goodb\.claude\projects\C--Users-goodb\memory\telegram_downloader.md`
