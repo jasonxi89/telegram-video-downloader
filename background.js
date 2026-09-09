@@ -69,6 +69,16 @@ let completedUrls = [];
 let popupPort = null;
 const pendingCancelTimers = new Map();
 const pendingCommandTimers = new Map();
+let stateRestored = false;
+// Preserve event order until stored ownership and download state are available.
+const restoringMessages = [];
+
+function refreshActivity(dl, tabId, observedAt) {
+  if (!dl || dl.tabId !== tabId || !["active", "paused"].includes(dl.status)) return false;
+  const previous = Number.isFinite(dl.updatedAt) ? dl.updatedAt : 0;
+  dl.updatedAt = Math.max(previous, observedAt);
+  return true;
+}
 
 function extractDocKey(url) {
   if (!url) return url;
@@ -86,6 +96,7 @@ function extractDocKey(url) {
 const STATUS_TYPES = new Set([
   "dl-start",
   "dl-progress",
+  "dl-activity",
   "dl-complete",
   "dl-error",
   "dl-pause",
@@ -167,20 +178,22 @@ function normalizeStatusMessage(rawMsg, sender) {
 // Persist state to local storage — throttled to max once per 2s
 let saveTimer = null;
 function saveState() {
-  if (saveTimer) return;
+  if (!stateRestored || saveTimer) return;
   saveTimer = setTimeout(() => {
     chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
     saveTimer = null;
   }, 2000);
 }
 function saveStateNow() {
+  if (!stateRestored) return;
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
 }
 
-// Restore on startup — merge with any entries added during async gap
+// Restore first, replay received events in order, then classify stale rows.
 chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
   try {
+    data = data && typeof data === "object" ? data : {};
     if (Array.isArray(data.completedUrls)) {
       for (const url of data.completedUrls) {
         if (typeof url === "string" && !completedUrls.includes(url)) {
@@ -189,38 +202,48 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
       }
     }
     if (data.downloads && typeof data.downloads === "object") {
-      const now = Date.now();
-      for (const dl of Object.values(data.downloads)) {
-        if (!dl) continue;
-        // Transient command-feedback note must not survive a SW restart
-        delete dl.commandError;
-        if (
-          (dl.status === "active" ||
-            dl.status === "paused" ||
-            dl.status === "cancelling") &&
-          now - dl.updatedAt > 60000
-        ) {
-          dl.status = "error";
-          dl.error = "Download interrupted";
-          dl.speed = 0;
-        }
+      for (const [id, dl] of Object.entries(data.downloads)) {
+        if (!DOWNLOAD_ID_PATTERN.test(id) || !dl || typeof dl !== "object" ||
+            Array.isArray(dl) || dl.id !== id) continue;
+        downloads[id] = { ...dl };
+        delete downloads[id].commandError;
       }
-      // Merge: stored entries first, then any new ones added during async restore
-      downloads = { ...data.downloads, ...downloads };
     }
-    updateBadge();
+    // Use the same handler as live delivery; activity followed by error/cancel
+    // must not become a resurrected active row, even across worker startup.
+    for (const event of restoringMessages) {
+      try {
+        applyStatusMessage(event.msg, event.tabId, event.observedAt);
+      } catch (err) {
+        console.error("[TG DL] Failed to replay status", event.msg.id, err);
+      }
+    }
+    const now = Date.now();
+    for (const dl of Object.values(downloads)) {
+      if (dl && ["active", "paused", "cancelling"].includes(dl.status) &&
+          now - dl.updatedAt > 60000) {
+        dl.status = "error";
+        dl.error = "Download interrupted";
+        dl.speed = 0;
+      }
+    }
+    stateRestored = true;
+    // Badge/UI failures must not suppress authoritative persistence/snapshot.
+    try { updateBadge(); } catch (err) { console.warn("[TG DL] Badge unavailable", err); }
     saveStateNow();
     sendToPopup({ type: "state-snapshot", downloads: { ...downloads } });
   } catch (err) {
     console.error("[TG DL] Failed to restore state", err);
   } finally {
+    restoringMessages.length = 0;
+    stateRestored = true;
     resolveStateReady();
   }
 });
 
 function updateBadge() {
   const activeCount = Object.values(downloads).filter(
-    (d) => d.status === "active"
+    (d) => d && d.status === "active"
   ).length;
   if (activeCount > 0) {
     chrome.action.setBadgeText({ text: String(activeCount) });
@@ -231,7 +254,7 @@ function updateBadge() {
 }
 
 function sendToPopup(msg) {
-  if (!popupPort) return;
+  if (!stateRestored || !popupPort) return;
   try {
     popupPort.postMessage(msg);
   } catch {
@@ -321,8 +344,21 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
   const msg = normalizeStatusMessage(rawMsg, sender);
   if (!msg) return;
 
-  const { type, id } = msg;
   const tabId = sender.tab.id;
+  const observedAt = Date.now();
+  if (!stateRestored) {
+    restoringMessages.push({ msg, tabId, observedAt });
+    return;
+  }
+  applyStatusMessage(msg, tabId, observedAt);
+});
+
+function applyStatusMessage(msg, tabId, observedAt) {
+  const { type, id } = msg;
+  if (type === "dl-activity") {
+    if (refreshActivity(downloads[id], tabId, observedAt)) saveState();
+    return;
+  }
   if (downloads[id] && downloads[id].tabId !== tabId) return;
   if (type === "dl-complete" || type === "dl-error" || type === "dl-cancel") {
     clearPendingCancel(id);
@@ -347,7 +383,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
       pct: 0,
       speed: 0,
       tabId,
-      updatedAt: Date.now(),
+      updatedAt: observedAt,
     };
   } else if (type === "dl-progress") {
     if (!downloads[id]) {
@@ -362,14 +398,14 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
         pct: 0,
         speed: 0,
         tabId,
-        updatedAt: Date.now(),
+        updatedAt: observedAt,
       };
     }
     if (!downloads[id].key && msg.key) downloads[id].key = msg.key;
     downloads[id].offset = msg.offset;
     downloads[id].total = msg.total;
     downloads[id].pct = msg.pct;
-    downloads[id].updatedAt = Date.now();
+    downloads[id].updatedAt = observedAt;
 
     // Paused: ignore residual progress from in-flight chunk
     if (downloads[id].status === "paused") {
@@ -386,7 +422,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
       downloads[id].speed = 0;
       downloads[id].filename = msg.filename;
       downloads[id].total = msg.total;
-      downloads[id].updatedAt = Date.now();
+      downloads[id].updatedAt = observedAt;
       // Persist completed URL for inline button state (normalize to doc ID)
       const dlUrl = downloads[id].url;
       if (dlUrl) {
@@ -402,18 +438,18 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
       downloads[id].status = "error";
       downloads[id].error = msg.error;
       downloads[id].speed = 0;
-      downloads[id].updatedAt = Date.now();
+      downloads[id].updatedAt = observedAt;
     }
   } else if (type === "dl-pause") {
     if (downloads[id]) {
       downloads[id].status = "paused";
       downloads[id].speed = 0;
-      downloads[id].updatedAt = Date.now();
+      downloads[id].updatedAt = observedAt;
     }
   } else if (type === "dl-resume") {
     if (downloads[id]) {
       downloads[id].status = "active";
-      downloads[id].updatedAt = Date.now();
+      downloads[id].updatedAt = observedAt;
     }
   } else if (type === "dl-cancel") {
     clearPendingCancel(id);
@@ -431,7 +467,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
   } else if (downloads[id]) {
     sendToPopup({ type: "dl-update", download: downloads[id] });
   }
-});
+}
 
 // Popup connection
 chrome.runtime.onConnect.addListener((port) => {
