@@ -50,12 +50,12 @@ if (!window.__TG_DL_LOADED) {
       throw new Error("HTTP " + res.status);
     }
     const range = res.headers.get("Content-Range");
+    const encoding = (res.headers.get("Content-Encoding") || "").trim().toLowerCase();
     if (res.status === 200) {
       if (requestedOffset !== 0 || range !== null) {
         throw new Error("Unexpected full response during ranged download");
       }
       const length = res.headers.get("Content-Length");
-      const encoding = res.headers.get("Content-Encoding");
       // Fetch decodes content encoding; encoded Content-Length is not blob.size.
       const useLength = length !== null && (!encoding || encoding === "identity");
       const size = useLength ? Number(length) : null;
@@ -68,7 +68,6 @@ if (!window.__TG_DL_LOADED) {
     const match = range && range.match(RANGE_REGEX);
     if (!match) throw new Error("Invalid or missing Content-Range");
     const [start, end, total] = match.slice(1).map(Number);
-    const encoding = res.headers.get("Content-Encoding");
     if (encoding && encoding !== "identity") {
       throw new Error("Encoded partial responses are not supported");
     }

@@ -324,17 +324,20 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
 
   const { type, id } = msg;
   const tabId = sender.tab.id;
-  if (downloads[id] && downloads[id].tabId !== tabId) return;
   if (type === "dl-activity") {
-    const dl = downloads[id];
-    // Activity is not progress or a command ACK. Never revive terminal entries
-    // or extend the cancelling deadline; unknown IDs cannot create downloads.
-    if (dl && (dl.status === "active" || dl.status === "paused")) {
-      dl.updatedAt = Date.now();
-      saveState();
-    }
+    const observedAt = Date.now();
+    // A known persisted download may not be in memory during SW restoration.
+    void stateReady.then(() => {
+      const dl = downloads[id];
+      // Recheck ownership/state after waiting. Activity is not progress or ACK.
+      if (dl && dl.tabId === tabId && (dl.status === "active" || dl.status === "paused")) {
+        dl.updatedAt = Math.max(dl.updatedAt, observedAt);
+        saveState();
+      }
+    });
     return;
   }
+  if (downloads[id] && downloads[id].tabId !== tabId) return;
   if (type === "dl-complete" || type === "dl-error" || type === "dl-cancel") {
     clearPendingCancel(id);
   }

@@ -34,6 +34,8 @@ function harness(responses, callbacks = {}, environment = {}) {
   const messages = [];
   const requests = [];
   const saves = [];
+  const timers = [];
+  const revokedUrls = [];
   const callbackEvents = [];
   const listeners = [];
   let objectBlob;
@@ -48,11 +50,11 @@ function harness(responses, callbacks = {}, environment = {}) {
   const context = {
     window, Blob, AbortController, Date: environment.Date || Date,
     console: { log() {}, error() {} },
-    // Do not schedule the 15-second object URL cleanup timer in unit tests.
-    setTimeout() {},
+    // Record timers for deterministic execution instead of sleeping in tests.
+    setTimeout(fn, ms) { timers.push({ fn, ms }); return timers.length; },
     URL: {
       createObjectURL(blob) { objectBlob = blob; return "blob:mock"; },
-      revokeObjectURL() {},
+      revokeObjectURL(url) { revokedUrls.push(url); },
     },
     document: {
       body: { appendChild() {} },
@@ -78,7 +80,7 @@ function harness(responses, callbacks = {}, environment = {}) {
   }
   const id = window.__TG_DL(origin + "/progressive/document123", opts);
   return {
-    id, window, messages, requests, saves, callbackEvents,
+    id, window, messages, requests, saves, callbackEvents, timers, revokedUrls,
     statuses: (type) => messages.filter((message) => message.type === type),
     command(action) {
       for (const listener of listeners) {

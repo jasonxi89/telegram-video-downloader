@@ -55,6 +55,8 @@ const invalid = [
   ["200 unsafe length", [response(200, null, "abc", { "Content-Length": "9007199254740992" })]],
   ["encoded partial response", [response(206, "bytes 0-2/6", "abc", { "Content-Encoding": "gzip" })]],
   ["HTTP 416", [response(416, null, "")]],
+  ["HTTP 503 with plausible range", [response(503, "bytes 0-8/9", "MAINTENCE")]],
+  ["200 exponential length", [response(200, null, "x".repeat(1000), { "Content-Length": "1e3" })]],
 ];
 for (const [name, responses] of invalid) {
   test(`reject ${name} without saving or advancing invalid progress`, async () => {
@@ -65,9 +67,37 @@ for (const [name, responses] of invalid) {
     assert.equal(run.statuses("dl-progress").length, responses.length - 1);
     assert.equal(run.callbackEvents.filter((e) => e.name === "onError").length, 1);
     assert.equal(run.callbackEvents.filter((e) => e.name === "onComplete").length, 0);
-    assert(run.requests.at(-1).signal.aborted, "invalid response must release its fetch");
+    assert(run.requests.at(-1).signal.aborted, "invalid response must abort its signal");
   });
 }
+
+test("invalid headers do not emit activity or consume a response body", async () => {
+  for (const res of [response(416, null, "abc"), response(206, null, "abc"),
+    response(206, "bytes 1-3/6", "bcd")]) {
+    let reads = 0;
+    res.blob = async () => { reads++; return new Blob(["abc"]); };
+    const run = harness([res]);
+    await run.settled();
+    assertTerminal(run, "dl-error");
+    assert.equal(run.statuses("dl-activity").length, 0);
+    assert.equal(reads, 0);
+  }
+});
+
+test("successful save schedules and executes object URL cleanup", async () => {
+  const run = harness([response(200, null, "abc")]);
+  await assertSaved(run, "abc");
+  assert.equal(run.timers.length, 1);
+  assert.equal(run.timers[0].ms, 15000);
+  assert.deepEqual(run.revokedUrls, []);
+  run.timers[0].fn();
+  assert.deepEqual(run.revokedUrls, ["blob:mock"]);
+});
+
+test("mixed-case identity encoding preserves the sequential response path", async () => {
+  const run = harness([response(206, "bytes 0-2/3", "abc", { "Content-Encoding": "Identity" })]);
+  await assertSaved(run, "abc");
+});
 
 test("body read failure cannot advance progress or save", async () => {
   const res = firstChunk();

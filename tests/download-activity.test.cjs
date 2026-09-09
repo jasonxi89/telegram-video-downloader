@@ -14,8 +14,9 @@ function event() {
 }
 
 // Real downloader -> real content bridge -> real background, all in local VMs.
-function integration({ deliverCommands = true } = {}) {
+function integration({ deliverCommands = true, delayRestore = false } = {}) {
   let now = 0;
+  let restore;
   let timerId = 0;
   const timers = new Map();
   class Clock extends Date { static now() { return now; } }
@@ -38,7 +39,13 @@ function integration({ deliverCommands = true } = {}) {
         },
       },
       runtime: { onMessage: backgroundMessage, onConnect: connects, onInstalled: event(), onStartup: event() },
-      storage: { local: { get(_keys, callback) { queueMicrotask(() => callback({})); }, async set() {} } },
+      storage: { local: {
+        get(_keys, callback) {
+          restore = callback;
+          if (!delayRestore) queueMicrotask(() => callback({}));
+        },
+        async set() {},
+      } },
       action: { setBadgeText() {}, setBadgeBackgroundColor() {} },
     },
   });
@@ -62,6 +69,10 @@ function integration({ deliverCommands = true } = {}) {
   load("content.js", bridge);
   return {
     sentCommands,
+    restore(data) { restore(data); },
+    pageSend(message, origin = bridgeWindow.location.origin, source = bridgeWindow) {
+      pageMessage.emit({ source, origin, data: message });
+    },
     setTime(value) { now = value; },
     tick(value) {
       now = value;
@@ -126,24 +137,95 @@ test("activity cannot spoof ownership, acknowledge commands or revive terminal s
   app.send({ ...message, id: "dl_99_abcdef" });
   assert.equal(Object.keys(app.state()).length, 1);
   app.send(message);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(app.state()[run.id].updatedAt, 1000);
   app.tick(2001);
   assert.match(app.state()[run.id].commandError, /Pause was not confirmed/);
   app.setTime(3000);
   app.send(message);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.match(app.state()[run.id].commandError, /Pause was not confirmed/);
   popup.command("cancel", run.id);
   assert.equal(app.state()[run.id].status, "cancelling");
   app.setTime(3500);
   app.send(message);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(app.state()[run.id].updatedAt, 3000);
   app.tick(5001);
   assert.equal(app.state()[run.id].status, "error");
   app.setTime(6000);
   app.send(message);
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(app.state()[run.id].status, "error");
   assert.equal(app.state()[run.id].updatedAt, 5001);
   run.command("cancel");
   headers.resolve(response(200, null, "abc"));
   await run.settled();
+});
+
+function persistedDownload(id, overrides = {}) {
+  return { id, tabId: 1, url: "https://web.telegram.org/progressive/document123",
+    key: "doc:123", filename: "123.mp4", status: "active", updatedAt: 0,
+    offset: 0, total: 0, pct: 0, speed: 0, ...overrides };
+}
+
+test("header activity waits for restored state then preserves popup cancellation", async () => {
+  const app = integration({ delayRestore: true, deliverCommands: false });
+  const id = "dl_0_abcdef";
+  app.setTime(35000);
+  app.pageSend({ source: "tg-dl", type: "dl-activity", id });
+  assert.equal(app.state()[id], undefined);
+  // Keep restoration pending across a full turn; Promise.resolve is not a barrier.
+  await new Promise((resolve) => setImmediate(resolve));
+  app.restore({ downloads: { [id]: persistedDownload(id) } });
+  await waitFor(() => app.state()[id]?.updatedAt === 35000);
+  app.setTime(36000);
+  const popup = app.popup();
+  assert.equal(app.state()[id].status, "active");
+  assert.equal(app.state()[id].offset, 0);
+  popup.command("cancel", id);
+  assert.equal(app.sentCommands.at(-1).action, "cancel");
+});
+
+test("queued activity rechecks restored ownership and status, not only pre-restore state", async () => {
+  for (const overrides of [{ tabId: 2 }, { status: "error" }, { status: "complete" },
+    { status: "cancelling" }]) {
+    const app = integration({ delayRestore: true });
+    const id = "dl_0_abcdef";
+    app.setTime(1000);
+    app.pageSend({ source: "tg-dl", type: "dl-activity", id });
+    app.restore({ downloads: { [id]: persistedDownload(id, overrides) } });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(app.state()[id].updatedAt, 0);
+    assert.equal(app.state()[id].status, overrides.status || "active");
+  }
+});
+
+test("queued activity cannot overwrite a newer timestamp or acknowledge a later terminal event", async () => {
+  const app = integration({ delayRestore: true });
+  const id = "dl_0_abcdef";
+  app.setTime(1000);
+  app.pageSend({ source: "tg-dl", type: "dl-activity", id });
+  app.restore({ downloads: { [id]: persistedDownload(id, { updatedAt: 2000 }) } });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.state()[id].updatedAt, 2000);
+  app.setTime(3000);
+  app.pageSend({ source: "tg-dl", type: "dl-activity", id });
+  app.send({ source: "tg-dl", type: "dl-error", id, error: "stopped" });
+  app.setTime(4000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.state()[id].status, "error");
+  assert.equal(app.state()[id].updatedAt, 3000);
+});
+
+test("content bridge rejects activity from another origin or window", async () => {
+  const app = integration({ delayRestore: true });
+  const id = "dl_0_abcdef";
+  app.restore({ downloads: { [id]: persistedDownload(id) } });
+  app.setTime(1000);
+  const message = { source: "tg-dl", type: "dl-activity", id };
+  app.pageSend(message, "https://example.invalid");
+  app.pageSend(message, "https://web.telegram.org", {});
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(app.state()[id].updatedAt, 0);
 });
