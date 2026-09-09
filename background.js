@@ -69,6 +69,15 @@ let completedUrls = [];
 let popupPort = null;
 const pendingCancelTimers = new Map();
 const pendingCommandTimers = new Map();
+let stateRestored = false;
+// Header observations for not-yet-restored IDs, partitioned by sender tab.
+const restoringActivity = new Map();
+
+function refreshActivity(dl, tabId, observedAt) {
+  if (!dl || dl.tabId !== tabId || !["active", "paused"].includes(dl.status)) return false;
+  dl.updatedAt = Math.max(dl.updatedAt, observedAt);
+  return true;
+}
 
 function extractDocKey(url) {
   if (!url) return url;
@@ -195,6 +204,12 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
         if (!dl) continue;
         // Transient command-feedback note must not survive a SW restart
         delete dl.commandError;
+        // Apply fresh evidence BEFORE deciding a persisted download is stale.
+        // A newer in-memory entry wins the merge and must not be overwritten.
+        const observedAt = restoringActivity.get(dl.id)?.get(dl.tabId);
+        if (!downloads[dl.id] && observedAt !== undefined) {
+          refreshActivity(dl, dl.tabId, observedAt);
+        }
         if (
           (dl.status === "active" ||
             dl.status === "paused" ||
@@ -215,6 +230,8 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
   } catch (err) {
     console.error("[TG DL] Failed to restore state", err);
   } finally {
+    restoringActivity.clear();
+    stateRestored = true;
     resolveStateReady();
   }
 });
@@ -326,15 +343,15 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
   const tabId = sender.tab.id;
   if (type === "dl-activity") {
     const observedAt = Date.now();
-    // A known persisted download may not be in memory during SW restoration.
-    void stateReady.then(() => {
-      const dl = downloads[id];
-      // Recheck ownership/state after waiting. Activity is not progress or ACK.
-      if (dl && dl.tabId === tabId && (dl.status === "active" || dl.status === "paused")) {
-        dl.updatedAt = Math.max(dl.updatedAt, observedAt);
-        saveState();
-      }
-    });
+    const dl = downloads[id];
+    if (dl) {
+      if (refreshActivity(dl, tabId, observedAt)) saveState();
+    } else if (!stateRestored) {
+      // Unknown IDs never create rows. Replay only onto a matching stored owner.
+      let observations = restoringActivity.get(id);
+      if (!observations) restoringActivity.set(id, observations = new Map());
+      observations.set(tabId, Math.max(observations.get(tabId) ?? 0, observedAt));
+    }
     return;
   }
   if (downloads[id] && downloads[id].tabId !== tabId) return;

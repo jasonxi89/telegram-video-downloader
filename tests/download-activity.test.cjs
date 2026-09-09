@@ -169,23 +169,26 @@ function persistedDownload(id, overrides = {}) {
     offset: 0, total: 0, pct: 0, speed: 0, ...overrides };
 }
 
-test("header activity waits for restored state then preserves popup cancellation", async () => {
+for (const headersAt of [35000, 65000]) {
+test(`header activity at ${headersAt}ms precedes restored stale classification`, async () => {
   const app = integration({ delayRestore: true, deliverCommands: false });
   const id = "dl_0_abcdef";
-  app.setTime(35000);
+  app.setTime(headersAt);
   app.pageSend({ source: "tg-dl", type: "dl-activity", id });
   assert.equal(app.state()[id], undefined);
   // Keep restoration pending across a full turn; Promise.resolve is not a barrier.
   await new Promise((resolve) => setImmediate(resolve));
   app.restore({ downloads: { [id]: persistedDownload(id) } });
-  await waitFor(() => app.state()[id]?.updatedAt === 35000);
-  app.setTime(36000);
+  await waitFor(() => app.state()[id]?.updatedAt === headersAt);
+  app.setTime(headersAt + 1000);
   const popup = app.popup();
   assert.equal(app.state()[id].status, "active");
   assert.equal(app.state()[id].offset, 0);
   popup.command("cancel", id);
   assert.equal(app.sentCommands.at(-1).action, "cancel");
 });
+
+}
 
 test("queued activity rechecks restored ownership and status, not only pre-restore state", async () => {
   for (const overrides of [{ tabId: 2 }, { status: "error" }, { status: "complete" },
@@ -228,4 +231,59 @@ test("content bridge rejects activity from another origin or window", async () =
   app.pageSend(message, "https://web.telegram.org", {});
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(app.state()[id].updatedAt, 0);
+});
+
+test("restore applies only the owner's observation and never creates unknown IDs", async () => {
+  const app = integration({ delayRestore: true });
+  const id = "dl_0_abcdef";
+  const message = { source: "tg-dl", type: "dl-activity", id };
+  app.setTime(65000);
+  app.pageSend(message);
+  app.setTime(66000);
+  app.send(message, { tab: { id: 2, url: "https://web.telegram.org/k/" }, frameId: 0 });
+  app.pageSend({ ...message, id: "dl_1_abcdef" });
+  await new Promise((resolve) => setImmediate(resolve));
+  app.restore({ downloads: { [id]: persistedDownload(id) } });
+  assert.equal(app.state()[id].updatedAt, 65000);
+  assert.equal(app.state()[id].status, "active");
+  assert.equal(Object.keys(app.state()).length, 1);
+});
+
+test("old paused rows accept activity but old terminal and cancelling rows do not", async () => {
+  for (const status of ["paused", "complete", "error", "cancelling"]) {
+    const app = integration({ delayRestore: true });
+    const id = "dl_0_abcdef";
+    app.setTime(65000);
+    app.pageSend({ source: "tg-dl", type: "dl-activity", id });
+    await new Promise((resolve) => setImmediate(resolve));
+    app.restore({ downloads: { [id]: persistedDownload(id, { status }) } });
+    assert.equal(app.state()[id].updatedAt, status === "paused" ? 65000 : 0);
+    assert.equal(app.state()[id].status, status === "cancelling" ? "error" : status);
+  }
+});
+
+test("newer in-memory terminal state wins over queued activity and stale storage", async () => {
+  const app = integration({ delayRestore: true });
+  const id = "dl_0_abcdef";
+  app.setTime(65000);
+  app.pageSend({ source: "tg-dl", type: "dl-activity", id });
+  app.setTime(66000);
+  app.send({ source: "tg-dl", type: "dl-start", id,
+    url: "https://web.telegram.org/progressive/document123", filename: "new.mp4" });
+  app.send({ source: "tg-dl", type: "dl-error", id, error: "body failed" });
+  app.restore({ downloads: { [id]: persistedDownload(id) } });
+  assert.equal(app.state()[id].status, "error");
+  assert.equal(app.state()[id].error, "body failed");
+  assert.equal(app.state()[id].updatedAt, 66000);
+});
+
+test("queued activity uses observation time, not restoration time, for staleness", async () => {
+  const app = integration({ delayRestore: true });
+  const id = "dl_0_abcdef";
+  app.setTime(1000);
+  app.pageSend({ source: "tg-dl", type: "dl-activity", id });
+  app.setTime(65000);
+  app.restore({ downloads: { [id]: persistedDownload(id) } });
+  assert.equal(app.state()[id].updatedAt, 1000);
+  assert.equal(app.state()[id].status, "error");
 });

@@ -91,10 +91,10 @@ icons/           16/48/128 png
 - body 完整读取且校验通过后才追加 Blob、推进 offset/total、计算速度和发送进度；取消后的迟到 body 不再产生进度或保存。
 - 首次 200 支持无 Content-Length；identity 编码有长度时必须与 body 匹配。编码后的 200 以 Fetch 解码后的 body 大小为准；编码的 206 保守拒绝，避免把编码字节范围用于解码后的字节。
 - 长度/范围校验不等于内容校验：相同长度的错误内容、无长度 200 的服务端静默截断不在本轮可验证范围内。
-- 本轮不改 Viewer、并行策略、流式落盘或 stale 策略。新增 `dl-activity` 经 content → background 等待 stateReady 后复查 ownership/state，仅刷新已知 active/paused 条目的活跃时间，不推进字节、不确认命令、不复活终态、不延长 cancelling deadline。这是仅响应头时的 liveness：body 单次读取超过 30 秒仍可能被旧 stale 策略误报，后续另修。
+- 本轮不改 Viewer、并行策略、流式落盘或 stale 策略。新增 `dl-activity` 经 content → background，仅刷新已知 active/paused 条目的活跃时间；恢复前收到的未知 ID 按 ID/tab 暂存观察时间，在匹配存储 owner 后、stale 分类之前应用，恢复完成立即清空队列，不推进字节、不确认命令、不复活终态、不延长 cancelling deadline。这是仅响应头时的 liveness：body 单次读取超过 30 秒仍可能被旧 stale 策略误报，后续另修。
 - 新增三层集成测试，执行真实 downloader/content/background：0s 开始、20s 收到头、31s 打开 Popup 时仍 active 且可取消；验证 activity 不跨 tab、不创建条目、不吞 pause 超时和 cancel 超时。
-- 自动测试当前 46/46 通过；覆盖错误 HTTP 携带合法 Range、指数格式 Content-Length、校验前不得 activity、Blob URL 定时释放、编码大小写、延迟 storage 恢复和 bridge 来源校验。5 个定向变异（状态校验、长度语法、activity 顺序、URL 释放、恢复屏障）均能触发测试失败。
-- 独立 Opus/Astra 复审进行中；本轮 Chrome 功能验证尚未执行，不得沿用 v2.10.1 的实机结果宣称新版已 release。
+- 自动测试当前 51/51 通过；覆盖错误 HTTP 携带合法 Range、指数格式 Content-Length、校验前不得 activity、Blob URL 定时释放、编码大小写、延迟 storage 恢复和 bridge 来源校验。此前 5 个定向变异（状态校验、长度语法、activity 顺序、URL 释放、恢复屏障）均能触发测试失败；本轮补充 65s 旧 active/paused、异 tab、终态、新内存状态优先、过期观察不变新等恢复回归。
+- Astra 提出的恢复前 stale 分类回归已修（65s 定向测试修前红、修后绿）；独立 Opus/Astra 最终复审进行中；本轮 Chrome 功能验证尚未执行，不得沿用 v2.10.1 的实机结果宣称新版已 release。
 
 ## 相关资源
 - Memory: `C:\Users\goodb\.claude\projects\C--Users-goodb\memory\telegram_downloader.md`
