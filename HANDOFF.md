@@ -1,5 +1,5 @@
 # HANDOFF — telegram-video-downloader
-> 跨 agent/IDE 接手文档 | 最后更新: 2026-09-08 | 改动项目后请同步更新此文档
+> 跨 agent/IDE 接手文档 | 最后更新: 2026-09-09 | 改动项目后请同步更新此文档
 
 ## 项目定位
 Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支持 Web K（`blob:` URL）和 Web A（`progressive/` 流式 URL）。纯前端扩展，**不是 NAS 服务，无后端、无部署流程、无构建步骤**。
@@ -94,7 +94,10 @@ icons/           16/48/128 png
 - 本轮不改 Viewer、并行策略、流式落盘或 stale 策略。新增 `dl-activity` 经 content → background，仅刷新已知 active/paused 条目的活跃时间；恢复期间经校验的消息按顺序暂存（含 tab 和实际观察时间），先加载 storage，再通过同一个 live handler 回放并复查 owner，最后 stale 分类；回放期间不写中间 storage/Popup 快照，完成后统一保存并清空队列，不推进字节、不确认命令、不复活终态、不延长 cancelling deadline。这是仅响应头时的 liveness：body 单次读取超过 30 秒仍可能被旧 stale 策略误报，后续另修。
 - 新增三层集成测试，执行真实 downloader/content/background：0s 开始、20s 收到头、31s 打开 Popup 时仍 active 且可取消；验证 activity 不跨 tab、不创建条目、不吞 pause 超时和 cancel 超时。
 - 自动测试当前 60/60 通过；覆盖错误 HTTP 携带合法 Range、指数格式 Content-Length、校验前不得 activity、Blob URL 定时释放、编码大小写、延迟 storage 恢复和 bridge 来源校验。此前 5 个定向变异（状态校验、长度语法、activity 顺序、URL 释放、恢复屏障）均能触发测试失败；本轮补充 65s 旧 active/paused、异 tab、终态、新内存状态优先、过期观察不变新等恢复回归。
-- Astra 提出的恢复前 stale 分类及 activity→body error 丢失均已修，新增无 dl-start 的真实三层失败复现和 cancel/complete/pause/resume 顺序回放测试；旧 e96cff4 对 body error 回归确实失败。另补缺失/损坏 storage 校验、逐事件回放异常隔离、badge 异常不压掉最终持久化、真实记录 storage/Popup 输出的门控断言。stateRestored 表示回放完成而非持久化成功，需先打开该门控再最终保存。独立 Opus/Astra 最终复审进行中；本轮 Chrome 功能验证尚未执行，不得沿用 v2.10.1 的实机结果宣称新版已 release。
+- Astra 提出的恢复前 stale 分类及 activity→body error 丢失均已修，新增无 dl-start 的真实三层失败复现和 cancel/complete/pause/resume 顺序回放测试；旧 e96cff4 对 body error 回归确实失败。另补缺失/损坏 storage 校验、逐事件回放异常隔离、badge 异常不压掉最终持久化、真实记录 storage/Popup 输出的门控断言。stateRestored 表示回放完成而非持久化成功，需先打开该门控再最终保存。独立最终复审：`94bb01b` 获 `claude-opus-5-sandbox` 和 `gpt-6-astra` 各自 SAFE TO MERGE（两者独立读源码并跑 60/60 测试）。标准 Opus 通道先前认证失败，实际完成审查的是 Opus sandbox，不混淆模型。本轮 Chrome 功能验证尚未执行，不得沿用 v2.10.1 的实机结果宣称新版已 release。
+- 恢复时跳过 null/非对象、非法下载 ID 或内部 id 与 key 不匹配的损坏条目，最终保存会移除这些条目；未实现此类损坏历史的迁移恢复，completedUrls 单独保留。
+- 非阻塞后续：>30s body stale 误报、实时路径 badge 异常隔离、损坏时间戳清理、存储错误可见反馈。Opus 的 throwing-getter 实验不代表 Chrome storage 可返回该对象，未据此扩展实现。
+- 发布前：重新加载扩展并刷新 Telegram，在 Web K inline 与 Web A 各下载多 chunk 大视频并检查播放、暂停/恢复/取消、Popup 状态及完成文件；Web K Viewer 仍按原生按钮路径验证，不声称 MSE blob 已可 fetch。
 
 ## 相关资源
 - Memory: `C:\Users\goodb\.claude\projects\C--Users-goodb\memory\telegram_downloader.md`
