@@ -70,12 +70,13 @@ let popupPort = null;
 const pendingCancelTimers = new Map();
 const pendingCommandTimers = new Map();
 let stateRestored = false;
-// Header observations for not-yet-restored IDs, partitioned by sender tab.
-const restoringActivity = new Map();
+// Preserve event order until stored ownership and download state are available.
+const restoringMessages = [];
 
 function refreshActivity(dl, tabId, observedAt) {
   if (!dl || dl.tabId !== tabId || !["active", "paused"].includes(dl.status)) return false;
-  dl.updatedAt = Math.max(dl.updatedAt, observedAt);
+  const previous = Number.isFinite(dl.updatedAt) ? dl.updatedAt : 0;
+  dl.updatedAt = Math.max(previous, observedAt);
   return true;
 }
 
@@ -177,18 +178,19 @@ function normalizeStatusMessage(rawMsg, sender) {
 // Persist state to local storage — throttled to max once per 2s
 let saveTimer = null;
 function saveState() {
-  if (saveTimer) return;
+  if (!stateRestored || saveTimer) return;
   saveTimer = setTimeout(() => {
     chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
     saveTimer = null;
   }, 2000);
 }
 function saveStateNow() {
+  if (!stateRestored) return;
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
   chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
 }
 
-// Restore on startup — merge with any entries added during async gap
+// Restore first, replay received events in order, then classify stale rows.
 chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
   try {
     if (Array.isArray(data.completedUrls)) {
@@ -199,38 +201,33 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
       }
     }
     if (data.downloads && typeof data.downloads === "object") {
-      const now = Date.now();
-      for (const dl of Object.values(data.downloads)) {
-        if (!dl) continue;
-        // Transient command-feedback note must not survive a SW restart
-        delete dl.commandError;
-        // Apply fresh evidence BEFORE deciding a persisted download is stale.
-        // A newer in-memory entry wins the merge and must not be overwritten.
-        const observedAt = restoringActivity.get(dl.id)?.get(dl.tabId);
-        if (!downloads[dl.id] && observedAt !== undefined) {
-          refreshActivity(dl, dl.tabId, observedAt);
-        }
-        if (
-          (dl.status === "active" ||
-            dl.status === "paused" ||
-            dl.status === "cancelling") &&
-          now - dl.updatedAt > 60000
-        ) {
-          dl.status = "error";
-          dl.error = "Download interrupted";
-          dl.speed = 0;
-        }
+      downloads = { ...data.downloads };
+      for (const dl of Object.values(downloads)) {
+        if (dl) delete dl.commandError;
       }
-      // Merge: stored entries first, then any new ones added during async restore
-      downloads = { ...data.downloads, ...downloads };
     }
+    // Use the same handler as live delivery; activity followed by error/cancel
+    // must not become a resurrected active row, even across worker startup.
+    for (const event of restoringMessages) {
+      applyStatusMessage(event.msg, event.tabId, event.observedAt);
+    }
+    const now = Date.now();
+    for (const dl of Object.values(downloads)) {
+      if (dl && ["active", "paused", "cancelling"].includes(dl.status) &&
+          now - dl.updatedAt > 60000) {
+        dl.status = "error";
+        dl.error = "Download interrupted";
+        dl.speed = 0;
+      }
+    }
+    stateRestored = true;
     updateBadge();
     saveStateNow();
     sendToPopup({ type: "state-snapshot", downloads: { ...downloads } });
   } catch (err) {
     console.error("[TG DL] Failed to restore state", err);
   } finally {
-    restoringActivity.clear();
+    restoringMessages.length = 0;
     stateRestored = true;
     resolveStateReady();
   }
@@ -249,7 +246,7 @@ function updateBadge() {
 }
 
 function sendToPopup(msg) {
-  if (!popupPort) return;
+  if (!stateRestored || !popupPort) return;
   try {
     popupPort.postMessage(msg);
   } catch {
@@ -339,19 +336,19 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
   const msg = normalizeStatusMessage(rawMsg, sender);
   if (!msg) return;
 
-  const { type, id } = msg;
   const tabId = sender.tab.id;
+  const observedAt = Date.now();
+  if (!stateRestored) {
+    restoringMessages.push({ msg, tabId, observedAt });
+    return;
+  }
+  applyStatusMessage(msg, tabId, observedAt);
+});
+
+function applyStatusMessage(msg, tabId, observedAt) {
+  const { type, id } = msg;
   if (type === "dl-activity") {
-    const observedAt = Date.now();
-    const dl = downloads[id];
-    if (dl) {
-      if (refreshActivity(dl, tabId, observedAt)) saveState();
-    } else if (!stateRestored) {
-      // Unknown IDs never create rows. Replay only onto a matching stored owner.
-      let observations = restoringActivity.get(id);
-      if (!observations) restoringActivity.set(id, observations = new Map());
-      observations.set(tabId, Math.max(observations.get(tabId) ?? 0, observedAt));
-    }
+    if (refreshActivity(downloads[id], tabId, observedAt)) saveState();
     return;
   }
   if (downloads[id] && downloads[id].tabId !== tabId) return;
@@ -378,7 +375,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
       pct: 0,
       speed: 0,
       tabId,
-      updatedAt: Date.now(),
+      updatedAt: observedAt,
     };
   } else if (type === "dl-progress") {
     if (!downloads[id]) {
@@ -393,14 +390,14 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
         pct: 0,
         speed: 0,
         tabId,
-        updatedAt: Date.now(),
+        updatedAt: observedAt,
       };
     }
     if (!downloads[id].key && msg.key) downloads[id].key = msg.key;
     downloads[id].offset = msg.offset;
     downloads[id].total = msg.total;
     downloads[id].pct = msg.pct;
-    downloads[id].updatedAt = Date.now();
+    downloads[id].updatedAt = observedAt;
 
     // Paused: ignore residual progress from in-flight chunk
     if (downloads[id].status === "paused") {
@@ -417,7 +414,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
       downloads[id].speed = 0;
       downloads[id].filename = msg.filename;
       downloads[id].total = msg.total;
-      downloads[id].updatedAt = Date.now();
+      downloads[id].updatedAt = observedAt;
       // Persist completed URL for inline button state (normalize to doc ID)
       const dlUrl = downloads[id].url;
       if (dlUrl) {
@@ -433,18 +430,18 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
       downloads[id].status = "error";
       downloads[id].error = msg.error;
       downloads[id].speed = 0;
-      downloads[id].updatedAt = Date.now();
+      downloads[id].updatedAt = observedAt;
     }
   } else if (type === "dl-pause") {
     if (downloads[id]) {
       downloads[id].status = "paused";
       downloads[id].speed = 0;
-      downloads[id].updatedAt = Date.now();
+      downloads[id].updatedAt = observedAt;
     }
   } else if (type === "dl-resume") {
     if (downloads[id]) {
       downloads[id].status = "active";
-      downloads[id].updatedAt = Date.now();
+      downloads[id].updatedAt = observedAt;
     }
   } else if (type === "dl-cancel") {
     clearPendingCancel(id);
@@ -462,7 +459,7 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
   } else if (downloads[id]) {
     sendToPopup({ type: "dl-update", download: downloads[id] });
   }
-});
+}
 
 // Popup connection
 chrome.runtime.onConnect.addListener((port) => {

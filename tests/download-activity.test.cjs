@@ -82,8 +82,10 @@ function integration({ deliverCommands = true, delayRestore = false } = {}) {
     },
     state() { return structuredClone(vm.runInContext("downloads", background)); },
     send(message, owner = sender) { backgroundMessage.emit(message, owner); },
-    start(responses) {
+    start(responses, { workerRestarted = false } = {}) {
       run = harness(responses, {}, { Date: Clock, onMessage(message) {
+        // A restarted worker did not receive the original page-side dl-start.
+        if (workerRestarted && message.type === "dl-start") return;
         pageMessage.emit({ source: bridgeWindow, origin: bridgeWindow.location.origin, data: message });
       } });
       return run;
@@ -286,4 +288,69 @@ test("queued activity uses observation time, not restoration time, for staleness
   app.restore({ downloads: { [id]: persistedDownload(id) } });
   assert.equal(app.state()[id].updatedAt, 1000);
   assert.equal(app.state()[id].status, "error");
+});
+
+test("body failure after headers survives worker restoration without a new start", async () => {
+  const app = integration({ delayRestore: true });
+  const headers = deferred();
+  const body = deferred();
+  let reading = false;
+  const res = response(206, "bytes 0-2/6", "abc");
+  res.blob = () => { reading = true; return body.promise; };
+  const run = app.start([() => headers.promise], { workerRestarted: true });
+  app.setTime(65000);
+  headers.resolve(res);
+  await waitFor(() => reading);
+  app.setTime(66000);
+  body.reject(new Error("body disconnected"));
+  await run.settled();
+  assertTerminal(run, "dl-error");
+  assert.equal(app.state()[run.id], undefined);
+  app.setTime(80000);
+  app.restore({ downloads: { [run.id]: persistedDownload(run.id) } });
+  assert.equal(app.state()[run.id].status, "error");
+  assert.equal(app.state()[run.id].error, "body disconnected");
+  assert.equal(app.state()[run.id].updatedAt, 66000);
+});
+
+for (const outcome of ["cancel", "complete", "pause-resume"]) {
+  test(`restoration replays activity then ${outcome} through the live state handler`, async () => {
+    const app = integration({ delayRestore: true });
+    const id = "dl_0_abcdef";
+    const message = { source: "tg-dl", id, url: "https://web.telegram.org/progressive/document123" };
+    app.setTime(65000);
+    app.pageSend({ ...message, type: "dl-activity" });
+    app.setTime(66000);
+    if (outcome === "pause-resume") {
+      app.pageSend({ ...message, type: "dl-pause" });
+      app.setTime(67000);
+      app.pageSend({ ...message, type: "dl-resume" });
+    } else if (outcome === "complete") {
+      app.pageSend({ ...message, type: "dl-progress", offset: 3, total: 3, pct: 100 });
+      app.pageSend({ ...message, type: "dl-complete", filename: "123.mp4", total: 3 });
+    } else {
+      app.pageSend({ ...message, type: "dl-cancel" });
+      app.pageSend({ ...message, type: "dl-activity" });
+    }
+    await new Promise((resolve) => setImmediate(resolve));
+    app.setTime(80000);
+    app.restore({ downloads: { [id]: persistedDownload(id) } });
+    if (outcome === "cancel") assert.equal(app.state()[id], undefined);
+    else {
+      assert.equal(app.state()[id].status, outcome === "complete" ? "complete" : "active");
+      assert.equal(app.state()[id].updatedAt, outcome === "complete" ? 66000 : 67000);
+    }
+  });
+}
+
+test("queued foreign status cannot mutate the restored owner's download", async () => {
+  const app = integration({ delayRestore: true });
+  const id = "dl_0_abcdef";
+  app.setTime(65000);
+  app.pageSend({ source: "tg-dl", id, type: "dl-activity" });
+  app.send({ source: "tg-dl", id, type: "dl-error", error: "foreign" },
+    { tab: { id: 2, url: "https://web.telegram.org/k/" }, frameId: 0 });
+  app.restore({ downloads: { [id]: persistedDownload(id) } });
+  assert.equal(app.state()[id].status, "active");
+  assert.equal(app.state()[id].error, undefined);
 });
