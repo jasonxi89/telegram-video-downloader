@@ -30,7 +30,7 @@ async function waitFor(predicate) {
   assert.fail("Download did not reach the expected state");
 }
 
-function harness(responses, callbacks = {}) {
+function harness(responses, callbacks = {}, environment = {}) {
   const messages = [];
   const requests = [];
   const saves = [];
@@ -40,10 +40,13 @@ function harness(responses, callbacks = {}) {
   const window = {
     location: { origin },
     addEventListener(_type, listener) { listeners.push(listener); },
-    postMessage(message) { messages.push(message); },
+    postMessage(message) {
+      messages.push(message);
+      environment.onMessage?.(message);
+    },
   };
   const context = {
-    window, Blob, AbortController,
+    window, Blob, AbortController, Date: environment.Date || Date,
     console: { log() {}, error() {} },
     // Do not schedule the 15-second object URL cleanup timer in unit tests.
     setTimeout() {},

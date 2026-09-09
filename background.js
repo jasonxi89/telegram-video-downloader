@@ -86,6 +86,7 @@ function extractDocKey(url) {
 const STATUS_TYPES = new Set([
   "dl-start",
   "dl-progress",
+  "dl-activity",
   "dl-complete",
   "dl-error",
   "dl-pause",
@@ -324,6 +325,16 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
   const { type, id } = msg;
   const tabId = sender.tab.id;
   if (downloads[id] && downloads[id].tabId !== tabId) return;
+  if (type === "dl-activity") {
+    const dl = downloads[id];
+    // Activity is not progress or a command ACK. Never revive terminal entries
+    // or extend the cancelling deadline; unknown IDs cannot create downloads.
+    if (dl && (dl.status === "active" || dl.status === "paused")) {
+      dl.updatedAt = Date.now();
+      saveState();
+    }
+    return;
+  }
   if (type === "dl-complete" || type === "dl-error" || type === "dl-cancel") {
     clearPendingCancel(id);
   }

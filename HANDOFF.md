@@ -91,8 +91,9 @@ icons/           16/48/128 png
 - body 完整读取且校验通过后才追加 Blob、推进 offset/total、计算速度和发送进度；取消后的迟到 body 不再产生进度或保存。
 - 首次 200 支持无 Content-Length；identity 编码有长度时必须与 body 匹配。编码后的 200 以 Fetch 解码后的 body 大小为准；编码的 206 保守拒绝，避免把编码字节范围用于解码后的字节。
 - 长度/范围校验不等于内容校验：相同长度的错误内容、无长度 200 的服务端静默截断不在本轮可验证范围内。
-- 本轮不改 Viewer、并行策略、流式落盘或 background 状态机。30 秒 stale 误报仍需后续处理；body 完成前不报告进度意味着慢 chunk 期间 Popup 可能继续误报失败。
-- 独立模型审查及本轮 Chrome 功能验证：待完成；不得沿用 v2.10.1 的实机结果宣称新版已 release。
+- 本轮不改 Viewer、并行策略、流式落盘或 stale 策略。新增 `dl-activity` 经 content → background 仅刷新已知 active/paused 条目的活跃时间，不推进字节、不确认命令、不复活终态、不延长 cancelling deadline，保留原有 header-time liveness；更广泛的 30 秒 stale 误报仍需后续处理。
+- 新增三层集成测试，执行真实 downloader/content/background：0s 开始、20s 收到头、31s 打开 Popup 时仍 active 且可取消；验证 activity 不跨 tab、不创建条目、不吞 pause 超时和 cancel 超时。
+- 独立模型审查进行中；本轮 Chrome 功能验证尚未执行，不得沿用 v2.10.1 的实机结果宣称新版已 release。
 
 ## 相关资源
 - Memory: `C:\Users\goodb\.claude\projects\C--Users-goodb\memory\telegram_downloader.md`

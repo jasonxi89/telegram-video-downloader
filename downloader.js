@@ -170,6 +170,8 @@ if (!window.__TG_DL_LOADED) {
         .then(async (res) => {
           if (dlState.cancelled) return;
           const plan = responsePlan(res, requestedOffset, total);
+          // Preserve header-time liveness without claiming unreceived bytes.
+          postStatus("dl-activity", { id, url, key });
           const blob = await res.blob();
           if (dlState.cancelled) return;
           if (blob.size === 0 || (plan.size !== null && blob.size !== plan.size)) {

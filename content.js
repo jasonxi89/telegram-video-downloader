@@ -8,6 +8,7 @@
   const STATUS_TYPES = new Set([
     "dl-start",
     "dl-progress",
+    "dl-activity",
     "dl-complete",
     "dl-error",
     "dl-pause",
