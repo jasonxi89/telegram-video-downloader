@@ -77,6 +77,7 @@ function refreshActivity(dl, tabId, observedAt) {
   if (!dl || dl.tabId !== tabId || !["active", "paused"].includes(dl.status)) return false;
   const previous = Number.isFinite(dl.updatedAt) ? dl.updatedAt : 0;
   dl.updatedAt = Math.max(previous, observedAt);
+  delete dl.activityWarning;
   return true;
 }
 
@@ -97,6 +98,7 @@ const STATUS_TYPES = new Set([
   "dl-start",
   "dl-progress",
   "dl-activity",
+  "dl-retry-error",
   "dl-complete",
   "dl-error",
   "dl-pause",
@@ -138,6 +140,10 @@ function normalizeStatusMessage(rawMsg, sender) {
   }
 
   const msg = { source: "tg-dl", type: rawMsg.type, id: rawMsg.id };
+  if (rawMsg.retryOf !== undefined) {
+    if (typeof rawMsg.retryOf !== "string" || !DOWNLOAD_ID_PATTERN.test(rawMsg.retryOf)) return null;
+    msg.retryOf = rawMsg.retryOf;
+  }
   if (typeof rawMsg.url === "string" && isDownloadUrl(rawMsg.url)) {
     msg.url = rawMsg.url;
   }
@@ -166,7 +172,7 @@ function normalizeStatusMessage(rawMsg, sender) {
   if (rawMsg.type === "dl-complete") {
     msg.total = finiteNumber(rawMsg.total);
   }
-  if (rawMsg.type === "dl-error") {
+  if (rawMsg.type === "dl-error" || rawMsg.type === "dl-retry-error") {
     msg.error =
       typeof rawMsg.error === "string"
         ? rawMsg.error.slice(0, 1000)
@@ -207,6 +213,7 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
             Array.isArray(dl) || dl.id !== id) continue;
         downloads[id] = { ...dl };
         delete downloads[id].commandError;
+        delete downloads[id].retrying;
       }
     }
     // Use the same handler as live delivery; activity followed by error/cancel
@@ -267,78 +274,6 @@ function sendCommand(tabId, action, id) {
   return chrome.tabs.sendMessage(tabId, { source: "tg-dl-cmd", action, id });
 }
 
-function clearPendingCancel(id) {
-  const timer = pendingCancelTimers.get(id);
-  if (timer) clearTimeout(timer);
-  pendingCancelTimers.delete(id);
-}
-
-function markCancelFailed(id, error) {
-  clearPendingCancel(id);
-  const dl = downloads[id];
-  if (!dl) return;
-  dl.status = "error";
-  dl.error = error || "Unable to cancel download";
-  dl.speed = 0;
-  dl.updatedAt = Date.now();
-  updateBadge();
-  saveStateNow();
-  sendToPopup({ type: "dl-update", download: dl });
-}
-
-function requestCancel(dl) {
-  if (pendingCancelTimers.has(dl.id) || dl.status === "cancelling") return;
-  dl.status = "cancelling";
-  dl.speed = 0;
-  dl.updatedAt = Date.now();
-  updateBadge();
-  saveStateNow();
-  sendToPopup({ type: "dl-update", download: dl });
-
-  const timer = setTimeout(() => {
-    markCancelFailed(dl.id, "Cancel was not confirmed by the page");
-  }, 2000);
-  pendingCancelTimers.set(dl.id, timer);
-  sendCommand(dl.tabId, "cancel", dl.id).catch((err) => {
-    markCancelFailed(
-      dl.id,
-      err && err.message ? err.message : "Unable to cancel download"
-    );
-  });
-}
-
-function clearPendingCommand(id) {
-  const timer = pendingCommandTimers.get(id);
-  if (timer) clearTimeout(timer);
-  pendingCommandTimers.delete(id);
-}
-
-// Pause/resume are not destructive, so an unconfirmed command keeps the
-// truthful status and surfaces a transient note instead of flipping to error.
-function markCommandUnconfirmed(id, action) {
-  clearPendingCommand(id);
-  const dl = downloads[id];
-  if (!dl) return;
-  dl.commandError =
-    (action === "pause" ? "Pause" : "Resume") +
-    " was not confirmed by the page";
-  dl.updatedAt = Date.now();
-  sendToPopup({ type: "dl-update", download: dl });
-}
-
-function requestPauseResume(dl, action) {
-  if (pendingCommandTimers.has(dl.id)) return;
-  delete dl.commandError;
-  const timer = setTimeout(() => {
-    markCommandUnconfirmed(dl.id, action);
-  }, 2000);
-  pendingCommandTimers.set(dl.id, timer);
-  // Status is not updated here — the dl-pause/dl-resume ack does it.
-  sendCommand(dl.tabId, action, dl.id).catch(() => {
-    markCommandUnconfirmed(dl.id, action);
-  });
-}
-
 // Status updates from content script
 chrome.runtime.onMessage.addListener((rawMsg, sender) => {
   const msg = normalizeStatusMessage(rawMsg, sender);
@@ -355,6 +290,19 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
 
 function applyStatusMessage(msg, tabId, observedAt) {
   const { type, id } = msg;
+  if (downloads[id] && downloads[id].tabId !== tabId) return;
+  if (type === "dl-retry-error") {
+    retryFailed(id, msg.error);
+    return;
+  }
+  if (type === "dl-start" && msg.retryOf) {
+    const old = downloads[msg.retryOf];
+    if (!old || old.tabId !== tabId || old.url !== msg.url || old.status !== "error") {
+      sendCommand(tabId, "cancel", id).catch(() => {});
+      return;
+    }
+    removeDownload(old.id, false);
+  }
   if (type === "dl-activity") {
     if (refreshActivity(downloads[id], tabId, observedAt)) saveState();
     return;
@@ -386,21 +334,8 @@ function applyStatusMessage(msg, tabId, observedAt) {
       updatedAt: observedAt,
     };
   } else if (type === "dl-progress") {
-    if (!downloads[id]) {
-      downloads[id] = {
-        id,
-        filename: "unknown_video.mp4",
-        url: msg.url,
-        key: msg.key || extractDocKey(msg.url),
-        status: "active",
-        offset: 0,
-        total: 0,
-        pct: 0,
-        speed: 0,
-        tabId,
-        updatedAt: observedAt,
-      };
-    }
+    // Only dl-start creates a task. Late progress cannot resurrect deleted rows.
+    if (!downloads[id]) return;
     if (!downloads[id].key && msg.key) downloads[id].key = msg.key;
     downloads[id].offset = msg.offset;
     downloads[id].total = msg.total;
@@ -414,9 +349,11 @@ function applyStatusMessage(msg, tabId, observedAt) {
       return;
     }
     downloads[id].speed = msg.speed;
+    delete downloads[id].activityWarning;
   } else if (type === "dl-complete") {
     if (downloads[id]) {
       if (!downloads[id].key && msg.key) downloads[id].key = msg.key;
+      clearRetry(id);
       downloads[id].status = "complete";
       downloads[id].pct = 100;
       downloads[id].speed = 0;
@@ -435,6 +372,7 @@ function applyStatusMessage(msg, tabId, observedAt) {
     }
   } else if (type === "dl-error") {
     if (downloads[id]) {
+      clearRetry(id);
       downloads[id].status = "error";
       downloads[id].error = msg.error;
       downloads[id].speed = 0;
@@ -453,6 +391,7 @@ function applyStatusMessage(msg, tabId, observedAt) {
     }
   } else if (type === "dl-cancel") {
     clearPendingCancel(id);
+    clearRetry(id);
     delete downloads[id];
   }
 
@@ -469,85 +408,5 @@ function applyStatusMessage(msg, tabId, observedAt) {
   }
 }
 
-// Popup connection
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== "popup") return;
-  popupPort = port;
-
-  // Stale detection: 30s no update or 5s without cancel ACK -> error
-  const now = Date.now();
-  let staleStateChanged = false;
-  for (const dl of Object.values(downloads)) {
-    if (dl.status === "active" && now - dl.updatedAt > 30000) {
-      dl.status = "error";
-      dl.error = "Download stalled (no update for 30s)";
-      dl.speed = 0;
-      dl.updatedAt = now;
-      staleStateChanged = true;
-    } else if (
-      dl.status === "cancelling" &&
-      now - dl.updatedAt > 5000
-    ) {
-      dl.status = "error";
-      dl.error = "Cancel was not confirmed by the page";
-      dl.speed = 0;
-      dl.updatedAt = now;
-      staleStateChanged = true;
-    }
-  }
-  updateBadge();
-  if (staleStateChanged) saveStateNow();
-
-  port.postMessage({ type: "state-snapshot", downloads: { ...downloads } });
-
-  // Commands from popup — wait for confirmation, don't optimistically update
-  port.onMessage.addListener((msg) => {
-    if (!msg || typeof msg.action !== "string") return;
-    if (msg.id !== undefined && typeof msg.id !== "string") return;
-    const dl = downloads[msg.id];
-
-    if (msg.action === "pause" && dl && dl.status === "active") {
-      requestPauseResume(dl, "pause");
-    } else if (msg.action === "resume" && dl && dl.status === "paused") {
-      requestPauseResume(dl, "resume");
-    } else if (
-      msg.action === "cancel" &&
-      dl &&
-      (dl.status === "active" || dl.status === "paused")
-    ) {
-      // Keep the entry until downloader.js confirms dl-cancel. If delivery or
-      // acknowledgement fails, retain a visible error instead of hiding it.
-      requestCancel(dl);
-    } else if (
-      msg.action === "delete" &&
-      dl &&
-      dl.status !== "active" &&
-      dl.status !== "paused"
-    ) {
-      delete downloads[msg.id];
-      updateBadge();
-      saveStateNow();
-      sendToPopup({ type: "dl-delete", id: msg.id });
-    } else if (msg.action === "clear-completed") {
-      for (const id of Object.keys(downloads)) {
-        const status = downloads[id].status;
-        if (
-          status === "active" ||
-          status === "paused" ||
-          status === "cancelling"
-        ) {
-          continue;
-        }
-        delete downloads[id];
-      }
-      completedUrls = [];
-      updateBadge();
-      saveStateNow();
-      sendToPopup({ type: "state-snapshot", downloads: { ...downloads } });
-    }
-  });
-
-  port.onDisconnect.addListener(() => {
-    if (popupPort === port) popupPort = null;
-  });
-});
+// Keep control/UI lifecycle separate from storage and status ingestion.
+importScripts("download-actions.js");

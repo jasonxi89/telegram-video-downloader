@@ -10,7 +10,7 @@ Chrome 扩展，用于从 Telegram 网页版下载视频 — 同时支持 [Web K
 - **Media viewer download** — download button when viewing videos fullscreen
 - **Progress display** — shows download percentage (⏳ 0% → 100% → ✅ Done), synced across all buttons for the same video
 - **Popup download manager** — click the extension icon for a download queue panel with progress bar, speed, and filename
-- **Download controls** — pause / resume / cancel / remove; completed items are kept with a re-download button
+- **Download controls** — pause / resume / cancel / remove; failed items have Retry (restart from zero); completed items are kept with a re-download button
 - **Badge** — extension icon shows the number of active downloads
 - **Album support** — download each video in a multi-video album
 - **Duplicate prevention** — the same video won't be downloaded twice concurrently
@@ -24,7 +24,7 @@ Chrome 扩展，用于从 Telegram 网页版下载视频 — 同时支持 [Web K
 - **全屏查看器下载** — 点开视频全屏查看时出现下载按钮
 - **下载进度显示** — 实时百分比（⏳ 0% → 100% → ✅ Done），同一视频的多个按钮进度同步
 - **Popup 下载管理面板** — 点击扩展图标弹出下载队列，显示进度条、速度、文件名
-- **下载控制** — 暂停 / 恢复 / 取消 / 删除；已完成条目保留并提供重新下载按钮
+- **下载控制** — 暂停 / 恢复 / 取消 / 删除；失败条目可 Retry（从头重新下载）；已完成条目保留并提供重新下载按钮
 - **Badge 角标** — 扩展图标显示当前活跃下载数量
 - **相册支持** — 多视频相册中的每个视频均可单独下载
 - **防重复下载** — 同一视频不会被并发下载两次

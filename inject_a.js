@@ -320,7 +320,7 @@ if (!window.__TG_DL_A_LOADED) {
       typeof event.data.key === "string" && event.data.key
         ? event.data.key
         : getVideoKey(event.data.url);
-    if (event.data.type === "dl-progress") {
+    if (event.data.type === "dl-start" || event.data.type === "dl-progress") {
       ACTIVE_DOWNLOADS.add(key);
       DOWNLOAD_PROGRESS.set(key, event.data.pct || 0);
     } else if (event.data.type === "dl-complete") {

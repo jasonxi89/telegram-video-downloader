@@ -65,7 +65,7 @@ function createDownloadItem(download) {
   const pct = safePercent(dl.pct);
   const speedText = dl.speed ? " \u00b7 " + formatSpeed(dl.speed) : "";
 
-  const statusLabel =
+  const statusLabel = dl.retrying ? "Retrying…" :
     status === "active"
       ? Math.round(pct) + "%"
       : status === "paused"
@@ -88,7 +88,7 @@ function createDownloadItem(download) {
   const detail =
     typeof dl.commandError === "string" && dl.commandError
       ? baseDetail + " · ⚠ " + dl.commandError
-      : baseDetail;
+      : dl.activityWarning ? baseDetail + " · " + dl.activityWarning : baseDetail;
 
   const item = document.createElement("div");
   item.className = "dl-item";
@@ -115,7 +115,12 @@ function createDownloadItem(download) {
   } else if (status === "paused") {
     actions.appendChild(createActionButton("resume", id, "Resume", "\u25b6"));
   }
-  if (status !== "cancelling") {
+  if (status === "error") {
+    const retry = createActionButton("retry", id, "Retry download from the beginning", "Retry");
+    retry.disabled = !!dl.retrying;
+    actions.appendChild(retry);
+  }
+  if (status !== "cancelling" && !dl.retrying) {
     const removeAction =
       status === "active" || status === "paused" ? "cancel" : "delete";
     actions.appendChild(
@@ -174,30 +179,22 @@ listEl.addEventListener("click", (e) => {
   const btn = e.target.closest(".dl-btn");
   if (!btn) return;
   const { action, id } = btn.dataset;
-  // delete = finished item (error/complete): safe to remove immediately
-  // cancel = active download: must wait for background to abort first
-  if (action === "delete") {
-    delete downloads[id];
-    render();
-  }
-  port.postMessage({ action, id });
+  sendAction({ action, id });
 });
 
-// Clear completed / errored downloads — optimistic, only touches finished items
+// Wait for the authoritative snapshot instead of hiding an unconfirmed deletion.
 clearBtn.addEventListener("click", () => {
-  for (const id of Object.keys(downloads)) {
-    const status = downloads[id].status;
-    if (
-      status !== "active" &&
-      status !== "paused" &&
-      status !== "cancelling"
-    ) {
-      delete downloads[id];
-    }
-  }
-  render();
-  port.postMessage({ action: "clear-completed" });
+  sendAction({ action: "clear-completed" });
 });
+
+function sendAction(message) {
+  try {
+    port.postMessage(message);
+  } catch {
+    emptyEl.textContent = "Extension connection lost. Close and reopen this panel.";
+    emptyEl.classList.remove("hidden");
+  }
+}
 
 // Connect to background
 const port = chrome.runtime.connect({ name: "popup" });

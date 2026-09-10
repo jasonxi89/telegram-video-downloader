@@ -1,5 +1,5 @@
 # HANDOFF — telegram-video-downloader
-> 跨 agent/IDE 接手文档 | 最后更新: 2026-09-09 | 改动项目后请同步更新此文档
+> 跨 agent/IDE 接手文档 | 最后更新: 2026-09-10 | 改动项目后请同步更新此文档
 
 ## 项目定位
 Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支持 Web K（`blob:` URL）和 Web A（`progressive/` 流式 URL）。纯前端扩展，**不是 NAS 服务，无后端、无部署流程、无构建步骤**。
@@ -8,17 +8,18 @@ Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支�
 - macOS 路径: `/Users/vn59ngs/Documents/personal/telegram-video-downloader`
 
 ## 当前状态
-- 版本 **v2.10.2（开发中，未 release）**：基于 v2.10.1，增加顺序 Range 完整性校验；本轮 Chrome 登录态回归尚未执行。
+- 版本 **v2.11.0（开发中，未 release）**：基于已合并 v2.10.2 增加 Popup Retry 和失败记录删除修复；本轮 Chrome 登录态回归尚未执行。
 - 功能可用：聊天内 + 全屏查看器下载按钮、下载进度显示、Popup 下载队列面板（进度/速度/文件名）、Badge 显示活跃下载数、暂停/恢复/取消/删除、Done 条目保留 + 重下载、album 多视频、同一视频多按钮进度同步、防重复下载
 - v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、inline/album 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义；**Web K viewer 按钮状态同步仍未解决**（实测 viewer blob 为 MSE，见 TODO）
 - `postMessage` 已加入 origin/type/schema/sender/tab ownership 校验，但 MAIN world 与 Telegram 页面同信任域，真正的通道认证及公开 `window.__TG_DL` API 收口仍待设计；P1/P2 其余清单见下方
-- 当前开发分支：`fix/download-integrity`（基线 `a2875d0` / main v2.10.1）
+- 当前开发分支：`fix/failed-download-retry`（基线 `b732a27` / main v2.10.2）
 
 ## 技术栈与结构
 纯 JS，无第三方依赖。消息流：`MAIN world → content.js 桥 → background(SW) → popup`。
 ```
 manifest.json   MV3 配置，permissions=[scripting, storage]，host=web.telegram.org
-background.js    MAIN world 脚本注入 + 下载状态管理 + badge + popup port
+background.js    MAIN world 脚本注入 + 下载状态管理 + badge
+ download-actions.js  Popup 命令、重试和取消生命周期（importScripts 加载）
 downloader.js    顺序分块 Range 下载引擎，postMessage 上报进度
 content.js       消息桥：MAIN world ⇄ Service Worker（ISOLATED world）
 inject_k.js      Web K 轮询扫描 video、注入按钮（POLL_MS=600）
@@ -98,6 +99,16 @@ icons/           16/48/128 png
 - 恢复时跳过 null/非对象、非法下载 ID 或内部 id 与 key 不匹配的损坏条目，最终保存会移除这些条目；未实现此类损坏历史的迁移恢复，completedUrls 单独保留。
 - 非阻塞后续：>30s body stale 误报、实时路径 badge 异常隔离、损坏时间戳清理、存储错误可见反馈。Opus 的 throwing-getter 实验不代表 Chrome storage 可返回该对象，未据此扩展实现。
 - 发布前：重新加载扩展并刷新 Telegram，在 Web K inline 与 Web A 各下载多 chunk 大视频并检查播放、暂停/恢复/取消、Popup 状态及完成文件；Web K Viewer 仍按原生按钮路径验证，不声称 MSE blob 已可 fetch。
+
+## v2.11.0 失败记录 Retry / X（2026-09-10）
+- Popup 失败条目新增原生 Retry 按钮（位于 X 左边），从 bytes=0 重新下载，不是断点续传。等待 dl-start 的 retryOf 确认后替换旧记录；期间禁用 Retry/隐藏 X，连续点击只发送一次。
+- 下载引擎 Retry 先 abort 同 ID 的存活旧任务再开始新任务，迟到旧 body 不会保存；同页同 URL/key 已有另一任务则拒绝重复下载。页面生命周期内同旧 ID 的 Retry 命令只执行一次。
+- 5 秒未确认或无法联系页面则保留错误行并显示原因；旧页面关闭、blob 失效、扩展更新但未刷新页面时需回 Telegram 重开视频。必须重载扩展并刷新 Telegram 使新 MAIN 脚本生效。
+- X/Clear 删除 error 记录会尽力向原页面发送 cancel，但删除历史不保证不可达页面的任务已终止。删除后未知 ID 的 progress 不再创建 skeleton，因此重启 SW 后也不会复活已删除条目；代价是从未收到 start 且 storage 无记录的旧下载不会靠进度重新建档。
+- Popup 不再乐观删除：等待后台确认，断线显示重开面板提示。后台恢复期间的命令等待 stateReady 后执行。
+- 30 秒无进度仅显示活动警告，不改 active 为 Failed，保留暂停/取消；冷启动 60 秒 interrupted 和取消失败仍可能表示状态未知，Retry 会先停止旧 ID。
+- 自动回归 75/75 通过：涵盖真实引擎→bridge→background 重试、迟到 body、双击、timeout、跨 tab、删除后迟到进度及 SW 重启、重试再次失败再重试；另有 Popup DOM mock 验证按钮顺序、可访问名称、禁用/等待确认和断线反馈。浏览器 UI/Telegram 实测尚未执行。
+- v2.10.2 的 Opus/Astra sign-off 不适用于本轮新代码。
 
 ## 相关资源
 - Memory: `C:\Users\goodb\.claude\projects\C--Users-goodb\memory\telegram_downloader.md`
