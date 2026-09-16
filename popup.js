@@ -2,6 +2,10 @@ const listEl = document.getElementById("list");
 const emptyEl = document.getElementById("empty");
 const clearBtn = document.getElementById("clearBtn");
 const downloads = {};
+const downloadItems = new Map();
+const itemNodes = new WeakMap();
+let renderScheduled = false;
+let connectionLost = false;
 
 function formatSize(bytes) {
   if (!bytes || bytes <= 0) return "0 B";
@@ -56,7 +60,7 @@ function createActionButton(action, id, label, text, destructive = false) {
   return button;
 }
 
-function createDownloadItem(download) {
+function updateDownloadItem(download, existingItem = null) {
   const dl = download && typeof download === "object" ? download : {};
   const id = typeof dl.id === "string" ? dl.id : "";
   const filename =
@@ -90,8 +94,23 @@ function createDownloadItem(download) {
       ? baseDetail + " · ⚠ " + dl.commandError
       : dl.activityWarning ? baseDetail + " · " + dl.activityWarning : baseDetail;
 
-  const item = document.createElement("div");
+  // Progress must not replace the button between pointer-down and pointer-up.
+  const controlsKey = status + ":" + !!dl.retrying;
+  const previous = existingItem && itemNodes.get(existingItem);
+  if (previous && previous.controlsKey === controlsKey) {
+    previous.filenameEl.title = filename;
+    if (previous.filenameEl.textContent !== filename) previous.filenameEl.textContent = filename;
+    if (previous.statusEl.textContent !== statusLabel) previous.statusEl.textContent = statusLabel;
+    previous.progress.setAttribute("aria-valuenow", String(Math.round(pct)));
+    previous.progressBar.style.width = pct + "%";
+    if (previous.detailEl.textContent !== detail) previous.detailEl.textContent = detail;
+    return existingItem;
+  }
+
+  const item = existingItem || document.createElement("div");
+  if (existingItem) item.replaceChildren();
   item.className = "dl-item";
+  item.dataset.id = id;
 
   const row = document.createElement("div");
   row.className = "dl-row";
@@ -148,7 +167,17 @@ function createDownloadItem(download) {
   detailEl.className = "dl-detail";
   detailEl.textContent = detail;
   item.appendChild(detailEl);
+  itemNodes.set(item, { controlsKey, filenameEl, statusEl, progress, progressBar, detailEl });
   return item;
+}
+
+function scheduleRender() {
+  if (renderScheduled) return;
+  renderScheduled = true;
+  requestAnimationFrame(() => {
+    renderScheduled = false;
+    render();
+  });
 }
 
 function render() {
@@ -161,17 +190,32 @@ function render() {
     (dl) => dl.status === "complete" || dl.status === "error"
   );
   clearBtn.classList.toggle("hidden", !hasFinished);
-  listEl.replaceChildren();
+  const currentIds = new Set(items.map((dl) => dl.id));
+  for (const [id, entry] of downloadItems) {
+    if (!currentIds.has(id)) {
+      entry.element.remove();
+      downloadItems.delete(id);
+    }
+  }
 
   if (items.length === 0) {
     emptyEl.classList.remove("hidden");
     return;
   }
 
-  emptyEl.classList.add("hidden");
-  const fragment = document.createDocumentFragment();
-  for (const item of items) fragment.appendChild(createDownloadItem(item));
-  listEl.appendChild(fragment);
+  // A frame queued before disconnection must not erase the connection notice.
+  emptyEl.classList.toggle("hidden", !connectionLost);
+  let next = listEl.firstChild;
+  for (const dl of items) {
+    let entry = downloadItems.get(dl.id);
+    if (!entry || entry.download !== dl) {
+      entry = { element: updateDownloadItem(dl, entry && entry.element), download: dl };
+      downloadItems.set(dl.id, entry);
+    }
+    // Only move rows when their order changes; reattaching every row also loses clicks.
+    if (entry.element !== next) listEl.insertBefore(entry.element, next);
+    next = entry.element.nextSibling;
+  }
 }
 
 // Event delegation for action buttons
@@ -191,6 +235,7 @@ function sendAction(message) {
   try {
     port.postMessage(message);
   } catch {
+    connectionLost = true;
     emptyEl.textContent = "Extension connection lost. Close and reopen this panel.";
     emptyEl.classList.remove("hidden");
   }
@@ -203,12 +248,12 @@ port.onMessage.addListener((msg) => {
   if (msg.type === "state-snapshot") {
     for (const key of Object.keys(downloads)) delete downloads[key];
     Object.assign(downloads, msg.downloads);
-    render();
+    scheduleRender();
   } else if (msg.type === "dl-update" && msg.download) {
     downloads[msg.download.id] = msg.download;
-    render();
+    scheduleRender();
   } else if (msg.type === "dl-delete" && msg.id) {
     delete downloads[msg.id];
-    render();
+    scheduleRender();
   }
 });
