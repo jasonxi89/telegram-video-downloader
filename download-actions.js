@@ -33,9 +33,10 @@ function requestRetry(dl) {
   }).catch(() => retryFailed(dl.id, "Cannot reach Telegram. Refresh the original tab and try again."));
 }
 
-function removeDownload(id, stop = true) {
+// Drop a row and its timers without persisting; callers batch save/notify.
+function forgetDownload(id, stop) {
   const dl = downloads[id];
-  if (!dl) return;
+  if (!dl) return false;
   // Error may be an old timeout, not an engine terminal. Best-effort stop;
   // deletion is history removal, not a promise that an unreachable tab stopped.
   if (stop && dl.status === "error") sendCommand(dl.tabId, "cancel", id).catch(() => {});
@@ -43,6 +44,11 @@ function removeDownload(id, stop = true) {
   clearPendingCommand(id);
   clearRetry(id);
   delete downloads[id];
+  return true;
+}
+
+function removeDownload(id, stop = true) {
+  if (!forgetDownload(id, stop)) return;
   updateBadge();
   saveStateNow();
   sendToPopup({ type: "dl-delete", id });
@@ -198,7 +204,7 @@ function handlePopupCommand(msg) {
       ) {
         continue;
       }
-      removeDownload(id);
+      forgetDownload(id, true);
     }
     completedUrls = [];
     updateBadge();
