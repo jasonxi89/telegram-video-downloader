@@ -101,7 +101,7 @@ if (!window.__TG_DL_LOADED) {
       if (typeof id !== "string" || !/^dl_\d+_[a-z0-9]{6}$/.test(id)) return;
       try {
         if (new URL(url).origin !== PAGE_ORIGIN) throw new Error("Invalid retry URL");
-        if (retriedDownloads.has(id)) throw new Error("Retry already requested; refresh the list");
+        if (retriedDownloads.has(id)) throw new Error("Retry already requested. Refresh Telegram before trying again.");
         const old = window.__TG_DL_ACTIVE[id];
         // Stop a falsely failed download before replacing it. Suppress the old
         // cancel event: the new dl-start will atomically replace its history row.

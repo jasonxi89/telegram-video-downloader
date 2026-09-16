@@ -168,3 +168,16 @@ test("active download cannot be retried from a stale popup", () => {
   assert.equal(app.sentCommands.length, 0);
   assert.equal(app.state()[id].status, "active");
 });
+
+test("page refuses a second retry of the same id and points at refreshing Telegram", async () => {
+  const app = integration();
+  const run = app.start([() => Promise.reject(new Error("offline")), response(200, null, "ok")]);
+  await run.settled();
+  const retry = { url: run.requests[0].url, key: "doc:123" };
+  run.command("retry", retry);
+  await waitFor(() => run.saves.length === 1);
+  run.command("retry", retry);
+  const [refused] = run.statuses("dl-retry-error");
+  assert.equal(refused.id, run.id);
+  assert.match(refused.error, /Refresh Telegram/);
+});
