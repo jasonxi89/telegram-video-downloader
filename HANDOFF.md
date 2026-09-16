@@ -8,7 +8,7 @@ Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支�
 - macOS 路径: `/Users/vn59ngs/Documents/personal/telegram-video-downloader`
 
 ## 当前状态
-- 版本 **v2.11.1（开发中，未 release）**：在 v2.11.0 Retry 修复上增加 Popup 合帧更新及 DOM 复用；对抗复查另修复排队刷新隐藏断线提示的问题，81 项自动测试通过，本机 Chromium 使用模拟任务验证。Windows 工具栏图标偶尔完全不弹窗的根因尚未确认。
+- 版本 **v2.11.2（开发中，未 release）**：v2.11.1（Retry + Popup 合帧/DOM 复用）经 Windows 侧审查后修掉 4 条 minor + 1 nit（见下方 v2.11.2 段），84 项自动测试通过。v2.11.x 尚未做 Chrome 实机验收；Windows 工具栏图标偶尔完全不弹窗的根因尚未确认。
 - 功能可用：聊天内 + 全屏查看器下载按钮、下载进度显示、Popup 下载队列面板（进度/速度/文件名）、Badge 显示活跃下载数、暂停/恢复/取消/删除、Done 条目保留 + 重下载、album 多视频、同一视频多按钮进度同步、防重复下载
 - v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、inline/album 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义；**Web K viewer 按钮状态同步仍未解决**（实测 viewer blob 为 MSE，见 TODO）
 - `postMessage` 已加入 origin/type/schema/sender/tab ownership 校验，但 MAIN world 与 Telegram 页面同信任域，真正的通道认证及公开 `window.__TG_DL` API 收口仍待设计；P1/P2 其余清单见下方
@@ -71,7 +71,7 @@ icons/           16/48/128 png
 - [ ] 所有运行时 UI 字符串硬编码英文（MAIN + Popup + background error；chrome.i18n 在 MAIN world 不可用，需经消息桥取翻译）
 - [ ] 暂停时进度仍更新 offset/total/pct，与代码注释矛盾
 - [x] popup port 竞态：v2.10.0 stale disconnect 仅在 `popupPort === port` 时清空活跃 port
-- [ ] 冷启动与 popup onConnect 的 staleness 清理逻辑不一致，paused 条目可能永久卡住
+- [ ] 冷启动与 popup onConnect 的 staleness 清理逻辑不一致，paused 条目可能永久卡住；v2.11.1 起 onConnect 对 30s 无进度的 active 行只加 `activityWarning` 不改状态（冷启动仍按 60s 转 error），差距进一步拉大：死掉的 active 行在用户 Cancel（2s 后转 error）或下次 SW 冷启动前，badge 会一直计 1
 - [x] pause/resume 命令失败静默回显旧状态：v2.10.1 增加 pendingCommandTimers（2s ack 超时）+ 投递失败即时反馈；两种失败都在条目 detail 行显示 "⚠ Pause/Resume was not confirmed by the page"（transient `commandError` 字段，不改真实 status，ack/终态到达即清除，SW 重启不残留）；回归测试 scratchpad test_pause_feedback.js 三场景全过
 - [x] 注入下载/Re-download 控件不可键盘操作：v2.10.0 改为原生 button，并为 Popup progress 增加 ARIA 语义
 
@@ -130,6 +130,14 @@ icons/           16/48/128 png
 - Chrome 明确拒绝保存的 4 KiB 对照中，浏览器为 canceled、receivedBytes=0，而扩展仍为 complete。完成状态未等待浏览器保存确认是既有问题；本轮不混入下载权限、保存跟踪或引擎协议改造。
 - 当前不能因“看不到窗口”推断从未创建 popup，也不能因 Chrome 菜单卡顿就排除扩展触发资源压力；窗口焦点/保存对话框、浏览器停顿均待 Windows 现场验证。
 - 审阅、复现脚本、截图和独立结果归档于同级 telegram-video-downloader-artifacts/2026-09-15/opus-review。审阅结论不等于 Windows 发布验收，用户 Windows 扩展尚未更新。
+
+## v2.11.2 审查修复（2026-09-15）
+- Windows 侧审查 PR #5（主会话通读 + 两个只读 agent，popup reconcile 随机 2000 序列 fuzz 0 失败）结论无 blocker；合并前顺手修掉 4 条 minor + 1 nit，Node 84/84。审查 agent 提出的"点击按钮文字时 `e.target` 为 Text 节点"是误报（鼠标事件 target 永远是 Element），未采纳。
+- `clear-completed` 改为 `forgetDownload` 逐行移除、循环结束统一保存 + 一次 snapshot（此前每行一次全量 storage 写 + dl-delete，实测 500 行 → 501 写/502 消息）；对 error 行的 best-effort cancel 命令保留。
+- `dl-complete` 对没有历史行的 id 仍把 key 记入 `completedUrls`（`rememberCompletedKey`），不重建行：文件已保存时 inline 按钮刷新后仍显示 Done；这是去掉 progress 建档后的补偿。
+- 页面侧 `retriedDownloads` 守卫的拒绝文案改为 "Retry already requested. Refresh Telegram before trying again."，与后台 5s 超时文案一致；守卫本身仍是页面生命周期内一次性，重载 Telegram 标签页才复位。
+- 删除 background.js 中重复的 tab ownership 检查（函数开头已覆盖）；`importScripts` 处加注释说明必须保持同步顶层导入。
+- 30s 无进度只加 warning 的副作用（badge 可长期计 1）未改代码，已记入上方 P2 staleness 条目。实机验收（Windows + 真实 Telegram）仍未执行，不能宣称 release。
 
 ## 相关资源
 - Memory: `C:\Users\goodb\.claude\projects\C--Users-goodb\memory\telegram_downloader.md`
