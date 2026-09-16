@@ -94,6 +94,12 @@ function extractDocKey(url) {
   return url;
 }
 
+function rememberCompletedKey(key) {
+  if (!key || completedUrls.includes(key)) return;
+  completedUrls.push(key);
+  if (completedUrls.length > 500) completedUrls.shift();
+}
+
 const STATUS_TYPES = new Set([
   "dl-start",
   "dl-progress",
@@ -361,13 +367,11 @@ function applyStatusMessage(msg, tabId, observedAt) {
       downloads[id].updatedAt = observedAt;
       // Persist completed URL for inline button state (normalize to doc ID)
       const dlUrl = downloads[id].url;
-      if (dlUrl) {
-        const key = downloads[id].key || msg.key || extractDocKey(dlUrl);
-        if (!completedUrls.includes(key)) {
-          completedUrls.push(key);
-          if (completedUrls.length > 500) completedUrls.shift();
-        }
-      }
+      if (dlUrl) rememberCompletedKey(downloads[id].key || msg.key || extractDocKey(dlUrl));
+    } else {
+      // The file was saved even if its row was deleted or never persisted;
+      // keep the inline Done state without resurrecting history.
+      rememberCompletedKey(msg.key || extractDocKey(msg.url));
     }
   } else if (type === "dl-error") {
     if (downloads[id]) {
