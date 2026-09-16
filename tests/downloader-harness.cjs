@@ -52,9 +52,9 @@ function harness(responses, callbacks = {}, environment = {}) {
     console: { log() {}, error() {} },
     // Record timers for deterministic execution instead of sleeping in tests.
     setTimeout(fn, ms) { timers.push({ fn, ms }); return timers.length; },
-    URL: {
-      createObjectURL(blob) { objectBlob = blob; return "blob:mock"; },
-      revokeObjectURL(url) { revokedUrls.push(url); },
+    URL: class extends URL {
+      static createObjectURL(blob) { objectBlob = blob; return "blob:mock"; }
+      static revokeObjectURL(url) { revokedUrls.push(url); }
     },
     document: {
       body: { appendChild() {} },
@@ -82,9 +82,9 @@ function harness(responses, callbacks = {}, environment = {}) {
   return {
     id, window, messages, requests, saves, callbackEvents, timers, revokedUrls,
     statuses: (type) => messages.filter((message) => message.type === type),
-    command(action) {
+    command(action, detail = {}) {
       for (const listener of listeners) {
-        listener({ source: window, origin, data: { source: "tg-dl-cmd", action, id } });
+        listener({ source: window, origin, data: { source: "tg-dl-cmd", action, id, ...detail } });
       }
     },
     async settled() {

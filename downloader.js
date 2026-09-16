@@ -7,6 +7,7 @@ if (!window.__TG_DL_LOADED) {
   const RANGE_REGEX = /^bytes (\d+)-(\d+)\/(\d+)$/;
   const PAGE_ORIGIN = window.location.origin;
   window.__TG_DL_ACTIVE = {};
+  const retriedDownloads = new Set();
 
   function generateFilename(url) {
     if (url) {
@@ -95,6 +96,32 @@ if (!window.__TG_DL_LOADED) {
     if (event.source !== window || event.origin !== PAGE_ORIGIN) return;
     if (!event.data || event.data.source !== "tg-dl-cmd") return;
     const { action, id } = event.data;
+    if (action === "retry") {
+      const { url, key } = event.data;
+      if (typeof id !== "string" || !/^dl_\d+_[a-z0-9]{6}$/.test(id)) return;
+      try {
+        if (new URL(url).origin !== PAGE_ORIGIN) throw new Error("Invalid retry URL");
+        if (retriedDownloads.has(id)) throw new Error("Retry already requested. Refresh Telegram before trying again.");
+        const old = window.__TG_DL_ACTIVE[id];
+        // Stop a falsely failed download before replacing it. Suppress the old
+        // cancel event: the new dl-start will atomically replace its history row.
+        if (old) {
+          old.cancelled = true;
+          old.controller?.abort();
+          delete window.__TG_DL_ACTIVE[id];
+          invokeCallback(old.onCancel);
+        }
+        if (Object.values(window.__TG_DL_ACTIVE).some((dl) =>
+          dl.url === url || (key && dl.key === key))) {
+          throw new Error("This video is already downloading");
+        }
+        retriedDownloads.add(id);
+        window.__TG_DL(url, { key, retryOf: id });
+      } catch (err) {
+        postStatus("dl-retry-error", { id, error: err.message });
+      }
+      return;
+    }
     const dl = window.__TG_DL_ACTIVE[id];
     if (!dl || dl.finished || dl.cancelled) return;
 
@@ -144,7 +171,7 @@ if (!window.__TG_DL_LOADED) {
       fetchNext: null,
     };
 
-    postStatus("dl-start", { id, filename, url, key, total: 0 });
+    postStatus("dl-start", { id, filename, url, key, total: 0, retryOf: opts.retryOf });
 
     function fetchNext() {
       if (

@@ -9,6 +9,7 @@
     "dl-start",
     "dl-progress",
     "dl-activity",
+    "dl-retry-error",
     "dl-complete",
     "dl-error",
     "dl-pause",
