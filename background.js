@@ -307,7 +307,6 @@ function applyStatusMessage(msg, tabId, observedAt) {
     if (refreshActivity(downloads[id], tabId, observedAt)) saveState();
     return;
   }
-  if (downloads[id] && downloads[id].tabId !== tabId) return;
   if (type === "dl-complete" || type === "dl-error" || type === "dl-cancel") {
     clearPendingCancel(id);
   }
@@ -409,4 +408,6 @@ function applyStatusMessage(msg, tabId, observedAt) {
 }
 
 // Keep control/UI lifecycle separate from storage and status ingestion.
+// Must stay a synchronous top-level import: applyStatusMessage and the storage
+// restore callback call functions defined there, and MV3 rejects late imports.
 importScripts("download-actions.js");
