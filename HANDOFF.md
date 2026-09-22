@@ -8,12 +8,12 @@ Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支�
 - macOS 路径: `/Users/vn59ngs/Documents/personal/telegram-video-downloader`
 
 ## 当前状态
-- **v2.11.3（分支 `fix/popup-render-limit`，已 push，PR 待合并；2026-09-22 用户已在 Windows 实机确认点 X 不再卡顿）**：修复 Popup 点 X 明显卡顿 / 鼠标不跟手的根因——开启无障碍时，大量渲染行下每删一行卡住浏览器 UI 线程约 1 秒；改为历史分页渲染（见下方 v2.11.3 段）。
+- **v2.11.3（main=`2e6bde9`，PR #7 已于 2026-09-22 合并，未 release；用户已在 Windows 实机确认点 X 不再卡顿）**：修复 Popup 点 X 明显卡顿 / 鼠标不跟手的根因——开启无障碍时，大量渲染行下每删一行卡住浏览器 UI 线程约 1 秒；改为历史分页渲染（见下方 v2.11.3 段）。
 - 基线版本 **v2.11.2（main=`083185c`，PR #5 已于 2026-09-15 合并，未 release）**：v2.11.1（Retry + Popup 合帧/DOM 复用）经 Windows 侧审查后修掉 4 条 minor + 1 nit（见下方 v2.11.2 段），84 项自动测试通过。v2.11.x 尚未做 Chrome 实机验收；Windows 工具栏图标偶尔完全不弹窗的根因尚未确认。
 - 功能可用：聊天内 + 全屏查看器下载按钮、下载进度显示、Popup 下载队列面板（进度/速度/文件名）、Badge 显示活跃下载数、暂停/恢复/取消/删除、Done 条目保留 + 重下载、album 多视频、同一视频多按钮进度同步、防重复下载
 - v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、inline/album 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义；**Web K viewer 按钮状态同步仍未解决**（实测 viewer blob 为 MSE，见 TODO）
 - `postMessage` 已加入 origin/type/schema/sender/tab ownership 校验，但 MAIN world 与 Telegram 页面同信任域，真正的通道认证及公开 `window.__TG_DL` API 收口仍待设计；P1/P2 其余清单见下方
-- 当前开发分支：`fix/popup-render-limit`（PR #7，基于 main `083185c`，v2.11.3）。PR #6 `fix/history-delete-jank`（删除日志）已于 2026-09-22 关闭，分支保留在远端。
+- 当前开发分支：无（`fix/popup-render-limit` 已随 PR #7 合并；下一轮从 main `2e6bde9` 开分支）。PR #6 `fix/history-delete-jank`（删除日志）已于 2026-09-22 关闭，分支保留在远端。
 
 ## 技术栈与结构
 纯 JS，无第三方依赖。消息流：`MAIN world → content.js 桥 → background(SW) → popup`。
@@ -75,7 +75,7 @@ icons/           16/48/128 png
 - [ ] 冷启动与 popup onConnect 的 staleness 清理逻辑不一致，paused 条目可能永久卡住；v2.11.1 起 onConnect 对 30s 无进度的 active 行只加 `activityWarning` 不改状态（冷启动仍按 60s 转 error），差距进一步拉大：死掉的 active 行在用户 Cancel（2s 后转 error）或下次 SW 冷启动前，badge 会一直计 1
 - [x] pause/resume 命令失败静默回显旧状态：v2.10.1 增加 pendingCommandTimers（2s ack 超时）+ 投递失败即时反馈；两种失败都在条目 detail 行显示 "⚠ Pause/Resume was not confirmed by the page"（transient `commandError` 字段，不改真实 status，ack/终态到达即清除，SW 重启不残留）；回归测试 scratchpad test_pause_feedback.js 三场景全过
 - [x] 注入下载/Re-download 控件不可键盘操作：v2.10.0 改为原生 button，并为 Popup progress 增加 ARIA 语义
-- [ ] 存储写入量：`downloads` 历史无上限（2026-09-22 用户实测 2.4k 行 / 714KB）；下载中 `saveState()` 每 2s 写一次全量，SW 冷启动 restore 末尾也无条件 `saveStateNow()`，用户本机 LevelDB 近 5 天约 3.3k 次全量重写。优先考虑：历史条数上限（产品决策）、进度只写活跃行（拆 key）、restore 有变化才写。PR #6 的删除日志方案已关闭（见 v2.11.3 段）
+- [ ] 存储写入量：`downloads` 历史无上限（2026-09-22 用户实测 2.4k 行 / 714KB）；下载中 `saveState()` 每 2s 写一次全量，SW 冷启动 restore 末尾也无条件 `saveStateNow()`，用户本机 LevelDB 近 5 天约 3.3k 次全量重写。**用户 2026-09-22 决定暂不设历史条数上限**，可做的是：进度只写活跃行（拆 key）、restore 有变化才写。PR #6 的删除日志方案已关闭（见 v2.11.3 段）
 - [ ] Popup 列表 `aria-live="polite"` 包住整个列表，读屏软件会播报每次进度变化；应只对状态提示使用 live region（与 v2.11.3 卡顿无关，已实测）
 
 ### PR #1 审查跟进（2026-07-23）
