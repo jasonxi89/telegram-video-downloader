@@ -8,7 +8,7 @@ Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支�
 - macOS 路径: `/Users/vn59ngs/Documents/personal/telegram-video-downloader`
 
 ## 当前状态
-- **v2.11.3（分支 `fix/popup-render-limit`，待 Windows 实机确认）**：修复 Popup 点 X 明显卡顿 / 鼠标不跟手的根因——开启无障碍时，大量渲染行下每删一行卡住浏览器 UI 线程约 1 秒；改为历史分页渲染（见下方 v2.11.3 段）。
+- **v2.11.3（分支 `fix/popup-render-limit`，已 push，PR 待合并；2026-09-22 用户已在 Windows 实机确认点 X 不再卡顿）**：修复 Popup 点 X 明显卡顿 / 鼠标不跟手的根因——开启无障碍时，大量渲染行下每删一行卡住浏览器 UI 线程约 1 秒；改为历史分页渲染（见下方 v2.11.3 段）。
 - 基线版本 **v2.11.2（main=`083185c`，PR #5 已于 2026-09-15 合并，未 release）**：v2.11.1（Retry + Popup 合帧/DOM 复用）经 Windows 侧审查后修掉 4 条 minor + 1 nit（见下方 v2.11.2 段），84 项自动测试通过。v2.11.x 尚未做 Chrome 实机验收；Windows 工具栏图标偶尔完全不弹窗的根因尚未确认。
 - 功能可用：聊天内 + 全屏查看器下载按钮、下载进度显示、Popup 下载队列面板（进度/速度/文件名）、Badge 显示活跃下载数、暂停/恢复/取消/删除、Done 条目保留 + 重下载、album 多视频、同一视频多按钮进度同步、防重复下载
 - v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、inline/album 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义；**Web K viewer 按钮状态同步仍未解决**（实测 viewer blob 为 MSE，见 TODO）
@@ -145,6 +145,7 @@ icons/           16/48/128 png
 - **根因**：Chrome 开启无障碍后，从渲染的行里删掉一个节点，浏览器 UI 线程要同步处理的无障碍树更新与**页面内总行数**成正比。v2.11.1 为保住按钮点击改成按 id 复用、只删一行，这个形态在 2.4k 行下每次 X 卡住浏览器 UI 线程约 1 秒（Playwright Chromium + `--force-renderer-accessibility` + 另一进程 `permissions.query` 探针测得）。v2.10.1 每次整表重建反而只卡约 250ms，所以旧版“不卡”。
 - **排除项（均已实测）**：去掉列表 `aria-live` 无效；把行分组成每组 20/50 行无效；加 list/listitem 语义更糟（约 1.5s）；PR #6 删除日志只把存储写从 X 路径拿掉，开启无障碍时仍卡约 0.6s。
 - **修复**：Popup 始终渲染全部未完成下载，已完成/失败历史每页 100 行，底部 “Show N more (M hidden)” 按钮按需展开；删除一行后由隐藏部分补位，已渲染行复用不重建。实测（真实扩展、开启无障碍、2.4k 行）：点 X 到行消失 720–950ms → 20–27ms，12 次点击的浏览器 UI 线程累计卡顿 11.6–15.2s → 53–214ms；关闭无障碍时无回退（约 20ms）。每页行数标定：100 行约 7ms、200 行约 9–41ms、500 行约 54ms。
+- **实机确认**：用户在 Windows（Native accessibility API 开启）重新加载扩展后确认点 X 不再卡顿。这只覆盖 X 卡顿，完整 release 实机验收（真实 Telegram 下载 / Retry / 暂停取消）仍未做。
 - 新增 3 个 popup 测试（分页展开、删除补位且复用节点、未完成下载不受分页限制），Node 全量 87/87。存储侧每次 X 仍全量写历史（约 20ms、不在无障碍热路径上）；PR #6 或历史上限可另行决定。列表上的 `aria-live="polite"` 与性能无关，但会让读屏软件播报进度变化，留作后续 a11y 改进。
 
 ## 相关资源
