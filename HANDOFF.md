@@ -1,5 +1,5 @@
 # HANDOFF — telegram-video-downloader
-> 跨 agent/IDE 接手文档 | 最后更新: 2026-09-15 | 改动项目后请同步更新此文档
+> 跨 agent/IDE 接手文档 | 最后更新: 2026-09-21 | 改动项目后请同步更新此文档
 
 ## 项目定位
 Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支持 Web K（`blob:` URL）和 Web A（`progressive/` 流式 URL）。纯前端扩展，**不是 NAS 服务，无后端、无部署流程、无构建步骤**。
@@ -8,11 +8,11 @@ Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支�
 - macOS 路径: `/Users/vn59ngs/Documents/personal/telegram-video-downloader`
 
 ## 当前状态
-- 版本 **v2.11.2（main=`3a16cd7`，PR #5 已于 2026-09-15 合并，未 release）**：v2.11.1（Retry + Popup 合帧/DOM 复用）经 Windows 侧审查后修掉 4 条 minor + 1 nit（见下方 v2.11.2 段），84 项自动测试通过。v2.11.x 尚未做 Chrome 实机验收；Windows 工具栏图标偶尔完全不弹窗的根因尚未确认。
+- 版本 **v2.11.3（开发中）**：基于已合并的 v2.11.2 优化大量历史下点 X 的持久化开销，102 项 Node 自动测试通过；Windows 鼠标卡顿仍需实机验证。
 - 功能可用：聊天内 + 全屏查看器下载按钮、下载进度显示、Popup 下载队列面板（进度/速度/文件名）、Badge 显示活跃下载数、暂停/恢复/取消/删除、Done 条目保留 + 重下载、album 多视频、同一视频多按钮进度同步、防重复下载
 - v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、inline/album 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义；**Web K viewer 按钮状态同步仍未解决**（实测 viewer blob 为 MSE，见 TODO）
 - `postMessage` 已加入 origin/type/schema/sender/tab ownership 校验，但 MAIN world 与 Telegram 页面同信任域，真正的通道认证及公开 `window.__TG_DL` API 收口仍待设计；P1/P2 其余清单见下方
-- 当前开发分支：无（`fix/failed-download-retry` 已随 PR #5 合并；下一轮从 main `3a16cd7` 开分支）
+- 当前开发分支：`fix/history-delete-jank`，基于 main `083185c`。
 
 ## 技术栈与结构
 纯 JS，无第三方依赖。消息流：`MAIN world → content.js 桥 → background(SW) → popup`。
@@ -138,6 +138,19 @@ icons/           16/48/128 png
 - 页面侧 `retriedDownloads` 守卫的拒绝文案改为 "Retry already requested. Refresh Telegram before trying again."，与后台 5s 超时文案一致；守卫本身仍是页面生命周期内一次性，重载 Telegram 标签页才复位。
 - 删除 background.js 中重复的 tab ownership 检查（函数开头已覆盖）；`importScripts` 处加注释说明必须保持同步顶层导入。
 - 30s 无进度只加 warning 的副作用（badge 可长期计 1）未改代码，已记入上方 P2 staleness 条目。实机验收（Windows + 真实 Telegram）仍未执行，不能宣称 release。
+
+## v2.11.3 历史删除持久化（2026-09-21）
+- 用户反馈最新版点已完成/失败记录的 X 时明显卡顿、鼠标移动不流畅，列表有几百条或更多，尚未区分 Done 与 Failed。基线为 main `083185c` / v2.11.2；不是上一轮仍未定位的“完全不弹窗”已获解决。
+- 确认逐行删除调用 `saveStateNow`，每个 X 都同步提交整个 `downloads` 和 `completedUrls`。本机合成 4,000 行约 5.9 MB 的对照中，后台 handler 约 23ms、删除反馈约 33ms；使用删除日志后约 0.6ms / 7ms。普通删除现在只写少量 ID。数据是合成的 macOS Chrome 测量，不能据此宣称 Windows 系统鼠标问题完全解决。
+- 新增可选存储键 `deletedDownloadIds`。后台内存立即移除记录，先持久记录被删 ID；恢复时在回放事件前过滤旧快照中的这些 ID。正常情况下累计 64 次删除、其他完整状态保存或当前面板关闭时整理快照。
+- 所有写入串行并合并重复请求。先成功写入删减后的 `downloads` / `completedUrls`，再单独更新或清空删除日志；只清理该快照覆盖的 ID，新来的删除继续保留。中断在两步之间只留下多余标记，不依赖多键 set 的原子性来防止历史复活。
+- 大快照失败后，后续 X 仍优先写小日志，不把失败标记当成每次全量重写的请求。非空日志也写失败时保留一次全快照回退：本次删除可能使大快照重新放得下。永久存储故障下这个回退仍可能较重；没有无新请求时的错误空转循环，也没有额外定时重试。
+- 完成后已无历史记录的重复完成消息，如果没有新增 completed key，不再触发写入；新 key 仍保留。删除后迟到的 cancel/error/progress 不再触发无意义全量写入，失败记录原有 best-effort cancel 行为保留。
+- 102 项回归覆盖延迟写入、恢复前/后删除、整理期间的新删除、64/65 边界、旧面板断开、日志和快照失败、配额恢复及重复完成。真实 Chrome 存储验证了旧快照+日志的启动恢复、X 的日志写入、整理，以及仅剩 1 字节空间时，先发生快照失败再删除仍能正确回退保存。该原生测试在启动读取前预置实际存储，不冒充成功执行过 runtime.reload；自动化加载方式下的 reload 尝试被浏览器拒绝。
+- 完整历史的复制没有凭空消失：4,000 行的关闭面板整理在额外 headless 标签页检查中约 27ms 同步提交 / 85ms 完成，随后小日志清理约 0.1ms / 1.8ms。一般状态转换仍可能写完整快照；这次只减少逐个 X 引起的重复工作。
+- UI 确认仍先于异步持久化成功；突然终止进程前尚未写入的操作可能丢失。旧版不认识删除日志，若回退版本，应先关闭面板并等待整理完成。本轮未改下载引擎、字节校验、Range 顺序或 Popup DOM 渲染。
+- 三轮实际返回的 Opus 审阅最终为 `ACCEPT_WITH_VALIDATION_GAPS`，无阻塞性正确性问题。修复了“旧快照失败导致后续 X 全量重写”的分支，并用真实 Chrome 的先失败后删除恢复证明不能仅因上次快照失败就禁止配额回退。ID 数字部分是 Date.now()，不是重载后重置的计数器；相关误报已撤回。
+- 已知边界：不可写存储下，新操作仍可能尝试一次较重回退；非删除状态保存失败后依靠后续保存请求重试，和 2.11.2 一样没有额外定时重试。失败后若只持续写小日志而不触发新的完整保存，日志可能超过 64 项，保留 ID 优先于硬截断。快照内 downloads/completedUrls 若有底层部分提交，可能留下旧的 inline 完成缓存；删除防复活依靠仍保留的日志，不以两键共同原子提交为前提。
 
 ## 相关资源
 - Memory: `C:\Users\goodb\.claude\projects\C--Users-goodb\memory\telegram_downloader.md`

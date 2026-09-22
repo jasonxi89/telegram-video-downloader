@@ -95,9 +95,10 @@ function extractDocKey(url) {
 }
 
 function rememberCompletedKey(key) {
-  if (!key || completedUrls.includes(key)) return;
+  if (!key || completedUrls.includes(key)) return false;
   completedUrls.push(key);
   if (completedUrls.length > 500) completedUrls.shift();
+  return true;
 }
 
 const STATUS_TYPES = new Set([
@@ -187,25 +188,111 @@ function normalizeStatusMessage(rawMsg, sender) {
   return msg;
 }
 
-// Persist state to local storage — throttled to max once per 2s
+// Individual history removals use a small durable journal. A full snapshot
+// folds it in on a state transition, after 64 removals, or when the panel closes.
+const deletedDownloadIds = new Set();
+const MAX_DELETION_JOURNAL = 64;
+let hasDeletionJournal = false;
+let storageWriteInFlight = false;
+let snapshotPending = false;
+let deletionWritePending = false;
+let persistenceRevision = 0;
+let snapshotFailed = false;
+let journalAfterSnapshot = false;
+let failedJournalRevision = -1;
+
+function flushPersistence() {
+  if (!stateRestored || storageWriteInFlight) return;
+  const snapshot = !journalAfterSnapshot &&
+    (snapshotPending || (!snapshotFailed && deletedDownloadIds.size >= MAX_DELETION_JOURNAL));
+  if (!snapshot && !deletionWritePending) return;
+  const revision = persistenceRevision;
+  const coveredDeletes = [...deletedDownloadIds];
+  if (snapshot) snapshotPending = false;
+  deletionWritePending = false;
+  journalAfterSnapshot = false;
+  const data = snapshot
+    ? { downloads, completedUrls }
+    : { deletedDownloadIds: coveredDeletes };
+  storageWriteInFlight = true;
+
+  function finish(error) {
+    storageWriteInFlight = false;
+    if (error) {
+      console.warn("[TG DL] Failed to persist download state", error);
+      if (snapshot) {
+        // A failed large snapshot must not turn every subsequent X back into
+        // another large write. Newly requested deletions can still be journaled.
+        snapshotFailed = true;
+        if (coveredDeletes.length && failedJournalRevision !== persistenceRevision) {
+          deletionWritePending = true;
+        }
+      } else {
+        failedJournalRevision = revision;
+        // Only a non-empty failed journal needs a space-reclaiming fallback.
+        // Failure to clear an old, redundant journal is safe to retry later.
+        // Retry even after an earlier snapshot failed: this deletion may have
+        // freed enough space for a snapshot while the journal still cannot fit.
+        if (coveredDeletes.length) snapshotPending = true;
+      }
+    } else if (snapshot) {
+      snapshotFailed = false;
+      for (const id of coveredDeletes) deletedDownloadIds.delete(id);
+      // Persist the reduced map FIRST, then rewrite the journal in a separate
+      // ordered call. A restart between those writes still sees safe old markers.
+      if (hasDeletionJournal || coveredDeletes.length) {
+        deletionWritePending = true;
+        journalAfterSnapshot = true;
+      }
+    } else {
+      hasDeletionJournal = coveredDeletes.length > 0;
+      failedJournalRevision = -1;
+    }
+    flushPersistence();
+  }
+  try {
+    Promise.resolve(chrome.storage.local.set(data)).then(() => finish(), finish);
+  } catch (error) {
+    finish(error);
+  }
+}
+
+function persistDeletedDownload(id) {
+  if (!stateRestored) return;
+  deletedDownloadIds.add(id);
+  deletionWritePending = true;
+  persistenceRevision++;
+  flushPersistence();
+}
+
+// Progress snapshots are throttled to max once per 2s.
 let saveTimer = null;
 function saveState() {
   if (!stateRestored || saveTimer) return;
   saveTimer = setTimeout(() => {
-    chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
     saveTimer = null;
+    saveStateNow();
   }, 2000);
 }
 function saveStateNow() {
   if (!stateRestored) return;
   if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-  chrome.storage.local.set({ downloads, completedUrls }).catch(() => {});
+  snapshotPending = true;
+  persistenceRevision++;
+  flushPersistence();
 }
 
 // Restore first, replay received events in order, then classify stale rows.
-chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
+chrome.storage.local.get(["downloads", "completedUrls", "deletedDownloadIds"], (data) => {
   try {
     data = data && typeof data === "object" ? data : {};
+    hasDeletionJournal = Object.hasOwn(data, "deletedDownloadIds") &&
+      (!Array.isArray(data.deletedDownloadIds) || data.deletedDownloadIds.length > 0);
+    if (Array.isArray(data.deletedDownloadIds)) {
+      for (const id of data.deletedDownloadIds) {
+        if (typeof id === "string" && DOWNLOAD_ID_PATTERN.test(id)) deletedDownloadIds.add(id);
+      }
+    }
     if (Array.isArray(data.completedUrls)) {
       for (const url of data.completedUrls) {
         if (typeof url === "string" && !completedUrls.includes(url)) {
@@ -217,6 +304,7 @@ chrome.storage.local.get(["downloads", "completedUrls"], (data) => {
       for (const [id, dl] of Object.entries(data.downloads)) {
         if (!DOWNLOAD_ID_PATTERN.test(id) || !dl || typeof dl !== "object" ||
             Array.isArray(dl) || dl.id !== id) continue;
+        if (deletedDownloadIds.has(id)) continue;
         downloads[id] = { ...dl };
         delete downloads[id].commandError;
         delete downloads[id].retrying;
@@ -297,6 +385,9 @@ chrome.runtime.onMessage.addListener((rawMsg, sender) => {
 function applyStatusMessage(msg, tabId, observedAt) {
   const { type, id } = msg;
   if (downloads[id] && downloads[id].tabId !== tabId) return;
+  // A removed task's late cancel/error/progress must not trigger another full
+  // history write. Completion still records its stable key without a row.
+  if (!downloads[id] && type !== "dl-start" && type !== "dl-complete") return;
   if (type === "dl-retry-error") {
     retryFailed(id, msg.error);
     return;
@@ -371,7 +462,7 @@ function applyStatusMessage(msg, tabId, observedAt) {
     } else {
       // The file was saved even if its row was deleted or never persisted;
       // keep the inline Done state without resurrecting history.
-      rememberCompletedKey(msg.key || extractDocKey(msg.url));
+      if (!rememberCompletedKey(msg.key || extractDocKey(msg.url))) return;
     }
   } else if (type === "dl-error") {
     if (downloads[id]) {

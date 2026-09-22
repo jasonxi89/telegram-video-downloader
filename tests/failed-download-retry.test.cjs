@@ -9,7 +9,7 @@ const row = (status = "error") => ({ id, tabId: 1, url, key: "doc:123", filename
   status, updatedAt: 0, offset: 0, total: 6, pct: 0, speed: 0 });
 
 for (const action of ["delete", "clear-completed"]) {
-  test(`${action} stays deleted after late progress and worker restart`, () => {
+  test(`${action} stays deleted after late progress and worker restart`, async () => {
     const app = integration({ delayRestore: true, deliverCommands: false });
     app.restore({ downloads: { [id]: row() } });
     app.popup().command(action, id);
@@ -18,7 +18,8 @@ for (const action of ["delete", "clear-completed"]) {
     app.send({ source: "tg-dl", type: "dl-progress", id, url, offset: 3, total: 6, pct: 50 });
     assert.equal(app.state()[id], undefined);
     const next = integration({ delayRestore: true });
-    next.restore(app.storageWrites.at(-1));
+    await app.settle();
+    next.restore(app.persisted());
     next.send({ source: "tg-dl", type: "dl-progress", id, url, offset: 6, total: 6, pct: 100 });
     assert.equal(next.state()[id], undefined);
   });
@@ -117,7 +118,10 @@ test("delete queued before storage ready is applied after restore", async () => 
   app.restore({ downloads: { [id]: row() } });
   await turn();
   assert.equal(app.state()[id], undefined);
-  assert.equal(app.storageWrites.at(-1).downloads[id], undefined);
+  await app.settle();
+  const restarted = integration({ delayRestore: true });
+  restarted.restore(app.persisted());
+  assert.equal(restarted.state()[id], undefined);
 });
 
 test("foreign retry acknowledgement cannot remove another tab's failed entry", () => {

@@ -13,13 +13,15 @@ function history(count) {
   return rows;
 }
 
-test("clear-completed persists and notifies once regardless of history size", () => {
+test("clear-completed persists and notifies once regardless of history size", async () => {
   const app = integration({ delayRestore: true, deliverCommands: false });
   app.restore({ downloads: history(40), completedUrls: ["doc:1"] });
+  await app.settle();
   const popup = app.popup();
   const writes = app.storageWrites.length;
   const messages = app.popupMessages.length;
   popup.command("clear-completed");
+  await app.settle();
   assert.equal(Object.keys(app.state()).length, 0);
   assert.equal(app.storageWrites.length - writes, 1, "one storage write for the whole clear");
   assert.deepEqual(app.storageWrites.at(-1), { downloads: {}, completedUrls: [] });

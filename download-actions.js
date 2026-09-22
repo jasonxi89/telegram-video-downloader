@@ -50,7 +50,7 @@ function forgetDownload(id, stop) {
 function removeDownload(id, stop = true) {
   if (!forgetDownload(id, stop)) return;
   updateBadge();
-  saveStateNow();
+  persistDeletedDownload(id);
   sendToPopup({ type: "dl-delete", id });
 }
 
@@ -165,7 +165,10 @@ chrome.runtime.onConnect.addListener((port) => {
     handlePopupCommand(msg);
   });
   port.onDisconnect.addListener(() => {
-    if (popupPort === port) popupPort = null;
+    if (popupPort === port) {
+      popupPort = null;
+      if (deletedDownloadIds.size) saveStateNow();
+    }
   });
 });
 

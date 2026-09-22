@@ -12,7 +12,7 @@ function event() {
 }
 
 // Real downloader -> real content bridge -> real background, all in local VMs.
-function integration({ deliverCommands = true, delayRestore = false, badgeThrows = false } = {}) {
+function integration({ deliverCommands = true, delayRestore = false, badgeThrows = false, delayWrites = false } = {}) {
   let now = 0;
   let restore;
   let timerId = 0;
@@ -25,6 +25,8 @@ function integration({ deliverCommands = true, delayRestore = false, badgeThrows
   const pageMessage = event();
   const sentCommands = [];
   const storageWrites = [];
+  const pendingWrites = [];
+  let persisted = {};
   const popupMessages = [];
   const background = vm.createContext({
     URL, Date: Clock, console: { ...console, error() {}, warn() {} },
@@ -44,7 +46,16 @@ function integration({ deliverCommands = true, delayRestore = false, badgeThrows
           restore = callback;
           if (!delayRestore) queueMicrotask(() => callback({}));
         },
-        async set(data) { storageWrites.push(structuredClone(data)); },
+        set(data) {
+          const snapshot = structuredClone(data);
+          storageWrites.push(snapshot);
+          const commit = () => Object.assign(persisted, snapshot);
+          if (delayWrites) return new Promise((resolve, reject) => {
+            pendingWrites.push({ resolve() { commit(); resolve(); }, reject });
+          });
+          commit();
+          return Promise.resolve();
+        },
       } },
       action: {
         setBadgeText() { if (badgeThrows) throw new Error("badge unavailable"); },
@@ -73,7 +84,15 @@ function integration({ deliverCommands = true, delayRestore = false, badgeThrows
   load("content.js", bridge);
   return {
     sentCommands, storageWrites, popupMessages,
-    restore(data) { restore(data); },
+    restore(data) { persisted = structuredClone(data || {}); restore(data); },
+    persisted() { return structuredClone(persisted); },
+    settle() { return new Promise(resolve => setImmediate(resolve)); },
+    finishWrite(error) {
+      const write = pendingWrites.shift();
+      if (!write) throw new Error("No pending storage write");
+      if (error) write.reject(error); else write.resolve();
+    },
+    pendingWrites() { return pendingWrites.length; },
     pageSend(message, origin = bridgeWindow.location.origin, source = bridgeWindow) {
       pageMessage.emit({ source, origin, data: message });
     },
@@ -98,7 +117,8 @@ function integration({ deliverCommands = true, delayRestore = false, badgeThrows
       const port = { name: "popup", onMessage: event(), onDisconnect: event(),
         postMessage(message) { popupMessages.push(structuredClone(message)); } };
       connects.emit(port);
-      return { command(action, id) { port.onMessage.emit({ action, id }); } };
+      return { command(action, id) { port.onMessage.emit({ action, id }); },
+        disconnect() { port.onDisconnect.emit(); } };
     },
   };
 }
