@@ -70,6 +70,31 @@ body {
   display: none;
 }
 
+.more-btn {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  border: none;
+  border-top: 1px solid #f0f0f0;
+  background: none;
+  cursor: pointer;
+  font-size: 12px;
+  color: #1765a8;
+}
+
+.more-btn:hover {
+  background: #f5f8fc;
+}
+
+.more-btn:focus-visible {
+  outline: 2px solid #1765a8;
+  outline-offset: -2px;
+}
+
+.more-btn.hidden {
+  display: none;
+}
+
 .dl-item {
   padding: 10px 14px;
   border-bottom: 1px solid #f0f0f0;

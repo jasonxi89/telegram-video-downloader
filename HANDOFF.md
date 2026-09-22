@@ -1,5 +1,5 @@
 # HANDOFF — telegram-video-downloader
-> 跨 agent/IDE 接手文档 | 最后更新: 2026-09-15 | 改动项目后请同步更新此文档
+> 跨 agent/IDE 接手文档 | 最后更新: 2026-09-22 | 改动项目后请同步更新此文档
 
 ## 项目定位
 Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支持 Web K（`blob:` URL）和 Web A（`progressive/` 流式 URL）。纯前端扩展，**不是 NAS 服务，无后端、无部署流程、无构建步骤**。
@@ -8,11 +8,12 @@ Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支�
 - macOS 路径: `/Users/vn59ngs/Documents/personal/telegram-video-downloader`
 
 ## 当前状态
-- 版本 **v2.11.2（main=`3a16cd7`，PR #5 已于 2026-09-15 合并，未 release）**：v2.11.1（Retry + Popup 合帧/DOM 复用）经 Windows 侧审查后修掉 4 条 minor + 1 nit（见下方 v2.11.2 段），84 项自动测试通过。v2.11.x 尚未做 Chrome 实机验收；Windows 工具栏图标偶尔完全不弹窗的根因尚未确认。
+- **v2.11.3（分支 `fix/popup-render-limit`，已 push，PR 待合并；2026-09-22 用户已在 Windows 实机确认点 X 不再卡顿）**：修复 Popup 点 X 明显卡顿 / 鼠标不跟手的根因——开启无障碍时，大量渲染行下每删一行卡住浏览器 UI 线程约 1 秒；改为历史分页渲染（见下方 v2.11.3 段）。
+- 基线版本 **v2.11.2（main=`083185c`，PR #5 已于 2026-09-15 合并，未 release）**：v2.11.1（Retry + Popup 合帧/DOM 复用）经 Windows 侧审查后修掉 4 条 minor + 1 nit（见下方 v2.11.2 段），84 项自动测试通过。v2.11.x 尚未做 Chrome 实机验收；Windows 工具栏图标偶尔完全不弹窗的根因尚未确认。
 - 功能可用：聊天内 + 全屏查看器下载按钮、下载进度显示、Popup 下载队列面板（进度/速度/文件名）、Badge 显示活跃下载数、暂停/恢复/取消/删除、Done 条目保留 + 重下载、album 多视频、同一视频多按钮进度同步、防重复下载
 - v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、inline/album 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义；**Web K viewer 按钮状态同步仍未解决**（实测 viewer blob 为 MSE，见 TODO）
 - `postMessage` 已加入 origin/type/schema/sender/tab ownership 校验，但 MAIN world 与 Telegram 页面同信任域，真正的通道认证及公开 `window.__TG_DL` API 收口仍待设计；P1/P2 其余清单见下方
-- 当前开发分支：无（`fix/failed-download-retry` 已随 PR #5 合并；下一轮从 main `3a16cd7` 开分支）
+- 当前开发分支：`fix/popup-render-limit`（PR #7，基于 main `083185c`，v2.11.3）。PR #6 `fix/history-delete-jank`（删除日志）已于 2026-09-22 关闭，分支保留在远端。
 
 ## 技术栈与结构
 纯 JS，无第三方依赖。消息流：`MAIN world → content.js 桥 → background(SW) → popup`。
@@ -74,6 +75,8 @@ icons/           16/48/128 png
 - [ ] 冷启动与 popup onConnect 的 staleness 清理逻辑不一致，paused 条目可能永久卡住；v2.11.1 起 onConnect 对 30s 无进度的 active 行只加 `activityWarning` 不改状态（冷启动仍按 60s 转 error），差距进一步拉大：死掉的 active 行在用户 Cancel（2s 后转 error）或下次 SW 冷启动前，badge 会一直计 1
 - [x] pause/resume 命令失败静默回显旧状态：v2.10.1 增加 pendingCommandTimers（2s ack 超时）+ 投递失败即时反馈；两种失败都在条目 detail 行显示 "⚠ Pause/Resume was not confirmed by the page"（transient `commandError` 字段，不改真实 status，ack/终态到达即清除，SW 重启不残留）；回归测试 scratchpad test_pause_feedback.js 三场景全过
 - [x] 注入下载/Re-download 控件不可键盘操作：v2.10.0 改为原生 button，并为 Popup progress 增加 ARIA 语义
+- [ ] 存储写入量：`downloads` 历史无上限（2026-09-22 用户实测 2.4k 行 / 714KB）；下载中 `saveState()` 每 2s 写一次全量，SW 冷启动 restore 末尾也无条件 `saveStateNow()`，用户本机 LevelDB 近 5 天约 3.3k 次全量重写。优先考虑：历史条数上限（产品决策）、进度只写活跃行（拆 key）、restore 有变化才写。PR #6 的删除日志方案已关闭（见 v2.11.3 段）
+- [ ] Popup 列表 `aria-live="polite"` 包住整个列表，读屏软件会播报每次进度变化；应只对状态提示使用 live region（与 v2.11.3 卡顿无关，已实测）
 
 ### PR #1 审查跟进（2026-07-23）
 - [x] Web K blob key：核对 tweb 源码确认 inline 可能为 `stream/{JSON}`、Viewer 可能为 `blob:`；现从 stream metadata + video metadata 注册媒体签名到 `doc:id`，blob 仅 Range 读取 1 byte 并用 Content-Range 总大小 + duration + dimensions 映射，key 随下载状态持久化；签名冲突时不猜测
@@ -138,6 +141,14 @@ icons/           16/48/128 png
 - 页面侧 `retriedDownloads` 守卫的拒绝文案改为 "Retry already requested. Refresh Telegram before trying again."，与后台 5s 超时文案一致；守卫本身仍是页面生命周期内一次性，重载 Telegram 标签页才复位。
 - 删除 background.js 中重复的 tab ownership 检查（函数开头已覆盖）；`importScripts` 处加注释说明必须保持同步顶层导入。
 - 30s 无进度只加 warning 的副作用（badge 可长期计 1）未改代码，已记入上方 P2 staleness 条目。实机验收（Windows + 真实 Telegram）仍未执行，不能宣称 release。
+
+## v2.11.3 Popup 历史分页（2026-09-22）
+- **症状**：Windows 上点已完成/失败记录的 X 明显卡顿、鼠标不跟手；没有下载时同样卡；用户确认 v2.10.1 时不卡。用户 Chrome 的 `chrome://accessibility` 中 Native accessibility API 为开启状态（Logi Options+、搜狗输入法等 UI Automation 客户端会自动开启它），本机历史约 2.4k 行。
+- **根因**：Chrome 开启无障碍后，从渲染的行里删掉一个节点，浏览器 UI 线程要同步处理的无障碍树更新与**页面内总行数**成正比。v2.11.1 为保住按钮点击改成按 id 复用、只删一行，这个形态在 2.4k 行下每次 X 卡住浏览器 UI 线程约 1 秒（Playwright Chromium + `--force-renderer-accessibility` + 另一进程 `permissions.query` 探针测得）。v2.10.1 每次整表重建反而只卡约 250ms，所以旧版“不卡”。
+- **排除项（均已实测）**：去掉列表 `aria-live` 无效；把行分组成每组 20/50 行无效；加 list/listitem 语义更糟（约 1.5s）；PR #6 删除日志只把存储写从 X 路径拿掉，开启无障碍时仍卡约 0.6s。
+- **修复**：Popup 始终渲染全部未完成下载，已完成/失败历史每页 100 行，底部 “Show N more (M hidden)” 按钮按需展开；删除一行后由隐藏部分补位，已渲染行复用不重建。实测（真实扩展、开启无障碍、2.4k 行）：点 X 到行消失 720–950ms → 20–27ms，12 次点击的浏览器 UI 线程累计卡顿 11.6–15.2s → 53–214ms；关闭无障碍时无回退（约 20ms）。每页行数标定：100 行约 7ms、200 行约 9–41ms、500 行约 54ms。
+- **实机确认**：用户在 Windows（Native accessibility API 开启）重新加载扩展后确认点 X 不再卡顿。这只覆盖 X 卡顿，完整 release 实机验收（真实 Telegram 下载 / Retry / 暂停取消）仍未做。
+- 新增 3 个 popup 测试（分页展开、删除补位且复用节点、未完成下载不受分页限制），Node 全量 87/87。存储侧每次 X 仍全量写历史（约 20ms、不在无障碍热路径上）。PR #6（删除日志）已关闭：开启无障碍时它不解决卡顿，#7 之后剩余收益约 18ms/次，不抵 8 个状态位的复杂度和回退旧版时已删记录复活的风险；存储优化见 P2 TODO。列表上的 `aria-live="polite"` 与性能无关，但会让读屏软件播报进度变化，留作后续 a11y 改进。
 
 ## 相关资源
 - Memory: `C:\Users\goodb\.claude\projects\C--Users-goodb\memory\telegram_downloader.md`

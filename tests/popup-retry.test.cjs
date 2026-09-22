@@ -66,7 +66,7 @@ function popup() {
     addEventListener(type, fn) { this.listeners[type] = fn; }
     closest() { return this; }
   }
-  const elements = Object.fromEntries(["list", "empty", "clearBtn"].map((id) => [id, new Element()]));
+  const elements = Object.fromEntries(["list", "empty", "clearBtn", "moreBtn"].map((id) => [id, new Element()]));
   let receive;
   let broken = false;
   const sent = [];
@@ -84,9 +84,16 @@ function popup() {
     queue: (msg) => receive(msg), flush, pendingFrames: () => frames.length,
     createdElements: () => createdElements, breakPort() { broken = true; },
     actions: () => all(elements.list).filter((node) => node.dataset.action),
-    click(button) { elements.list.listeners.click({ target: button }); } };
+    click(button) { elements.list.listeners.click({ target: button }); },
+    clickMore() { elements.moreBtn.listeners.click(); flush(); } };
 }
 const failed = { id: "dl_0_abcdef", filename: "test.mp4", status: "error", error: "offline", pct: 0 };
+function historyRows(count, status = "complete", first = 1000) {
+  return Object.fromEntries(Array.from({ length: count }, (_, i) => {
+    const id = `dl_${first + i}_abcdef`;
+    return [id, { ...failed, id, status, pct: 100 }];
+  }));
+}
 
 test("failed row places keyboard-accessible Retry immediately before X", () => {
   const app = popup();
@@ -225,4 +232,41 @@ test("snapshots reconcile removals and state changes without duplicating rows", 
   app.receive({ type: "state-snapshot", downloads: { [active.id]: { ...active, status: "paused" } } });
   assert.deepEqual(app.elements.list.children.map((row) => row.dataset.id), [active.id]);
   assert.deepEqual(app.actions().map((button) => button.dataset.action), ["resume", "cancel"]);
+});
+
+// With accessibility enabled, Chrome's per-removal cost grows with every rendered row.
+test("large history renders one page of finished rows and reveals more on demand", () => {
+  const app = popup();
+  const active = { ...failed, id: "dl_9_abcdef", status: "active", total: 100 };
+  app.receive({ type: "state-snapshot", downloads: { ...historyRows(250), [active.id]: active } });
+  assert.equal(app.elements.list.children.length, 101, "active row plus the first 100 finished rows");
+  assert.equal(app.elements.list.firstChild.dataset.id, active.id);
+  assert.equal(app.elements.moreBtn.classList.contains("hidden"), false);
+  assert.match(app.elements.moreBtn.textContent, /150 hidden/);
+  app.clickMore();
+  assert.equal(app.elements.list.children.length, 201);
+  assert.match(app.elements.moreBtn.textContent, /50 hidden/);
+  app.clickMore();
+  assert.equal(app.elements.list.children.length, 251);
+  assert.equal(app.elements.moreBtn.classList.contains("hidden"), true);
+});
+
+test("deleting a history row reuses rendered rows and fills the page from hidden history", () => {
+  const app = popup();
+  app.receive({ type: "state-snapshot", downloads: historyRows(150) });
+  const rows = [...app.elements.list.children];
+  assert.equal(rows.length, 100);
+  app.receive({ type: "dl-delete", id: rows[3].dataset.id });
+  const after = app.elements.list.children;
+  assert.equal(after.length, 100, "the next hidden row takes the freed slot");
+  rows.filter((_, i) => i !== 3).forEach((row, i) => assert.equal(after[i], row, "existing rows are reused"));
+  assert.match(app.elements.moreBtn.textContent, /49 hidden/);
+});
+
+test("unfinished downloads are always shown in addition to the history page", () => {
+  const app = popup();
+  const active = historyRows(120, "active", 5000);
+  app.receive({ type: "state-snapshot", downloads: { ...historyRows(150), ...active } });
+  assert.equal(app.elements.list.children.length, 220);
+  assert.ok(app.elements.list.children.slice(0, 120).every((row) => active[row.dataset.id]));
 });

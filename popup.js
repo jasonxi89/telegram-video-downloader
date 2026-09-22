@@ -1,6 +1,9 @@
 const listEl = document.getElementById("list");
 const emptyEl = document.getElementById("empty");
 const clearBtn = document.getElementById("clearBtn");
+const moreBtn = document.getElementById("moreBtn");
+const HISTORY_PAGE_SIZE = 100;
+let historyLimit = HISTORY_PAGE_SIZE;
 const downloads = {};
 const downloadItems = new Map();
 const itemNodes = new WeakMap();
@@ -190,7 +193,9 @@ function render() {
     (dl) => dl.status === "complete" || dl.status === "error"
   );
   clearBtn.classList.toggle("hidden", !hasFinished);
-  const currentIds = new Set(items.map((dl) => dl.id));
+  const visible = visibleItems(items);
+  updateMoreButton(items.length - visible.length);
+  const currentIds = new Set(visible.map((dl) => dl.id));
   for (const [id, entry] of downloadItems) {
     if (!currentIds.has(id)) {
       entry.element.remove();
@@ -206,7 +211,7 @@ function render() {
   // A frame queued before disconnection must not erase the connection notice.
   emptyEl.classList.toggle("hidden", !connectionLost);
   let next = listEl.firstChild;
-  for (const dl of items) {
+  for (const dl of visible) {
     let entry = downloadItems.get(dl.id);
     if (!entry || entry.download !== dl) {
       entry = { element: updateDownloadItem(dl, entry && entry.element), download: dl };
@@ -217,6 +222,27 @@ function render() {
     next = entry.element.nextSibling;
   }
 }
+
+// With accessibility enabled (common on Windows), Chrome's work for each row
+// removal grows with every rendered row: about 1s of browser UI stall per X at
+// 2k rows. Unfinished downloads always render; finished history is paged.
+function visibleItems(sortedItems) {
+  const unfinished = sortedItems.filter((dl) => sortOrder(dl.status) < 2).length;
+  return sortedItems.slice(0, unfinished + historyLimit);
+}
+
+function updateMoreButton(hiddenCount) {
+  moreBtn.classList.toggle("hidden", hiddenCount === 0);
+  if (hiddenCount > 0) {
+    const nextPage = Math.min(HISTORY_PAGE_SIZE, hiddenCount);
+    moreBtn.textContent = "Show " + nextPage + " more (" + hiddenCount + " hidden)";
+  }
+}
+
+moreBtn.addEventListener("click", () => {
+  historyLimit += HISTORY_PAGE_SIZE;
+  scheduleRender();
+});
 
 // Event delegation for action buttons
 listEl.addEventListener("click", (e) => {
