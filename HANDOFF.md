@@ -8,7 +8,7 @@ Chrome 扩展（Manifest V3），从 Telegram 网页版下载视频，同时支�
 - macOS 路径: `/Users/vn59ngs/Documents/personal/telegram-video-downloader`
 
 ## 当前状态
-- **v2.11.3（main=`2e6bde9`，PR #7 已于 2026-09-22 合并，未 release；用户已在 Windows 实机确认点 X 不再卡顿）**：修复 Popup 点 X 明显卡顿 / 鼠标不跟手的根因——开启无障碍时，大量渲染行下每删一行卡住浏览器 UI 线程约 1 秒；改为历史分页渲染（见下方 v2.11.3 段）。
+- **v2.11.3（main=`2e6bde9`，PR #7 已于 2026-09-22 合并；同日按用户决定打包提交 Chrome 应用商店，见 v2.11.3 段“发布”；用户已在 Windows 实机确认点 X 不再卡顿）**：修复 Popup 点 X 明显卡顿 / 鼠标不跟手的根因——开启无障碍时，大量渲染行下每删一行卡住浏览器 UI 线程约 1 秒；改为历史分页渲染（见下方 v2.11.3 段）。
 - 基线版本 **v2.11.2（main=`083185c`，PR #5 已于 2026-09-15 合并，未 release）**：v2.11.1（Retry + Popup 合帧/DOM 复用）经 Windows 侧审查后修掉 4 条 minor + 1 nit（见下方 v2.11.2 段），84 项自动测试通过。v2.11.x 尚未做 Chrome 实机验收；Windows 工具栏图标偶尔完全不弹窗的根因尚未确认。
 - 功能可用：聊天内 + 全屏查看器下载按钮、下载进度显示、Popup 下载队列面板（进度/速度/文件名）、Badge 显示活跃下载数、暂停/恢复/取消/删除、Done 条目保留 + 重下载、album 多视频、同一视频多按钮进度同步、防重复下载
 - v2.10.0 已修：暂停/恢复并发链、Viewer 悬浮按钮泄漏与媒体切换状态、inline/album 稳定 media key、Popup XSS、持久化 Cancel ACK/误报、扩展 reload bridge 恢复、SW 冷启动状态屏障、popup port 竞态、注入按钮键盘语义；**Web K viewer 按钮状态同步仍未解决**（实测 viewer blob 为 MSE，见 TODO）
@@ -148,6 +148,7 @@ icons/           16/48/128 png
 - **排除项（均已实测）**：去掉列表 `aria-live` 无效；把行分组成每组 20/50 行无效；加 list/listitem 语义更糟（约 1.5s）；PR #6 删除日志只把存储写从 X 路径拿掉，开启无障碍时仍卡约 0.6s。
 - **修复**：Popup 始终渲染全部未完成下载，已完成/失败历史每页 100 行，底部 “Show N more (M hidden)” 按钮按需展开；删除一行后由隐藏部分补位，已渲染行复用不重建。实测（真实扩展、开启无障碍、2.4k 行）：点 X 到行消失 720–950ms → 20–27ms，12 次点击的浏览器 UI 线程累计卡顿 11.6–15.2s → 53–214ms；关闭无障碍时无回退（约 20ms）。每页行数标定：100 行约 7ms、200 行约 9–41ms、500 行约 54ms。
 - **实机确认**：用户在 Windows（Native accessibility API 开启）重新加载扩展后确认点 X 不再卡顿。这只覆盖 X 卡顿，完整 release 实机验收（真实 Telegram 下载 / Retry / 暂停取消）仍未做。
+- **发布（2026-09-22，用户决定发 Chrome 应用商店）**：包 `C:\Users\goodb\Downloads\telegram-video-downloader-v2.11.3.zip`（32,137 bytes，SHA-256 `b077342d491fdd83a81307e53accea22f734e9c4717bc907756bf920f0667e28`），由 `git archive` 从 main `501cd1a` 只导出运行时文件（25 个：manifest、7 个 JS、popup.html/css、3 个图标、12 个 locale）。上架检查：MV3、无 `key`/`update_url`、12 个 locale 名称 ≤25 字/描述 ≤115 字（上限 75/132）、manifest 与代码引用的 13 个文件齐全、图标尺寸正确、无 eval/远程代码、JS 语法全过、Node 87/87；解压包在 Chromium 实际加载冒烟（SW 启动恢复、popup 空状态渲染、0 报错）。权限自 v2.10.1 起未变（`scripting`、`storage`、`https://web.telegram.org/*`）。上面的完整实机清单未逐项执行，由用户决定发布。
 - 新增 3 个 popup 测试（分页展开、删除补位且复用节点、未完成下载不受分页限制），Node 全量 87/87。存储侧每次 X 仍全量写历史（约 20ms、不在无障碍热路径上）。PR #6（删除日志）已关闭：开启无障碍时它不解决卡顿，#7 之后剩余收益约 18ms/次，不抵 8 个状态位的复杂度和回退旧版时已删记录复活的风险；存储优化见 P2 TODO。列表上的 `aria-live="polite"` 与性能无关，但会让读屏软件播报进度变化，留作后续 a11y 改进。
 
 ## 相关资源
